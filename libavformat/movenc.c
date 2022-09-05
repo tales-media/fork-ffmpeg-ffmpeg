@@ -2907,6 +2907,10 @@ static int mov_write_stbl_tag(AVFormatContext *s, AVIOContext *pb, MOVMuxContext
          track->par->codec_tag == MKTAG('r','t','p',' ')) &&
         track->has_keyframes && track->has_keyframes < track->entry)
         mov_write_stss_tag(pb, track, MOV_SYNC_SAMPLE);
+    if (track->par->codec_type == AVMEDIA_TYPE_VIDEO &&
+        mov->flags & FF_MOV_FLAG_CMAF &&
+        !track->has_keyframes)
+        mov_write_stss_tag(pb, track, MOV_SYNC_SAMPLE);
     if (track->par->codec_type == AVMEDIA_TYPE_VIDEO && track->has_disposable)
         mov_write_sdtp_tag(pb, track);
     if (track->mode == MODE_MOV && track->flags & MOV_TRACK_STPS)
