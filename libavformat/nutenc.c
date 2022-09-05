@@ -546,6 +546,7 @@ static int write_streaminfo(NUTContext *nut, AVIOContext *bc, int stream_id) {
     AVStream* st = s->streams[stream_id];
     const AVDictionaryEntry *t = NULL;
     AVIOContext *dyn_bc;
+    AVPacketSideData *sd;
     uint8_t *dyn_buf=NULL;
     int count=0, dyn_size, i;
     int ret = avio_open_dyn_buf(&dyn_bc);
@@ -558,6 +559,23 @@ static int write_streaminfo(NUTContext *nut, AVIOContext *bc, int stream_id) {
         if (st->disposition & ff_nut_dispositions[i].flag)
             count += add_info(dyn_bc, "Disposition", ff_nut_dispositions[i].str);
     }
+
+    for (i = 0; i < st->nb_side_data; i++) {
+        sd = &st->side_data[i];
+
+        switch (sd->type) {
+        case AV_PKT_DATA_DISPLAYMATRIX:;
+            uint8_t buf[128];
+            uint32_t *display_matrix = (uint32_t *)sd->data;
+            snprintf(buf, sizeof(buf), "%u:%u:%u:%u:%u:%u:%u:%u:%u",
+                     display_matrix[0], display_matrix[1], display_matrix[2],
+                     display_matrix[3], display_matrix[4], display_matrix[5],
+                     display_matrix[6], display_matrix[7], display_matrix[8]);
+            count += add_info(dyn_bc, "X-st_sd_displaymatrix", buf);
+            break;
+        }
+    }
+
     if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
         uint8_t buf[256];
         if (st->r_frame_rate.num>0 && st->r_frame_rate.den>0)

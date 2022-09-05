@@ -606,6 +606,15 @@ static int decode_info_header(NUTContext *nut)
                 continue;
             }
 
+            if (stream_id_plus1 && !strcmp(name, "X-st_sd_displaymatrix")) {
+                uint32_t *display_matrix = (uint32_t *)av_stream_new_side_data(st, AV_PKT_DATA_DISPLAYMATRIX, 9 * sizeof(uint32_t));
+                sscanf(str_value, "%u:%u:%u:%u:%u:%u:%u:%u:%u",
+                       &display_matrix[0], &display_matrix[1], &display_matrix[2],
+                       &display_matrix[3], &display_matrix[4], &display_matrix[5],
+                       &display_matrix[6], &display_matrix[7], &display_matrix[8]);
+                continue;
+            }
+
             if (metadata && av_strcasecmp(name, "Uses") &&
                 av_strcasecmp(name, "Depends") && av_strcasecmp(name, "Replaces")) {
                 if (event_flags)
