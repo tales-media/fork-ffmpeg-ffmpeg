@@ -134,6 +134,7 @@ typedef struct OptionsContext {
     SpecifierOptList audio_channels;
     SpecifierOptList audio_sample_rate;
     SpecifierOptList frame_rates;
+    SpecifierOptList min_frame_rates;
     SpecifierOptList max_frame_rates;
     SpecifierOptList frame_sizes;
     SpecifierOptList frame_pix_fmts;
@@ -518,6 +519,7 @@ typedef struct OutputStream {
 
     /* video only */
     AVRational frame_rate;
+    AVRational min_frame_rate;
     AVRational max_frame_rate;
     enum VideoSyncMethod vsync_method;
     int is_cfr;

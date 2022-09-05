@@ -584,7 +584,7 @@ static int new_stream_video(Muxer *mux, const OptionsContext *o,
 {
     AVFormatContext *oc = mux->fc;
     AVStream *st;
-    char *frame_rate = NULL, *max_frame_rate = NULL, *frame_aspect_ratio = NULL;
+    char *frame_rate = NULL, *max_frame_rate = NULL, *min_frame_rate = NULL, *frame_aspect_ratio = NULL;
     int ret = 0;
 
     st  = ost->st;
@@ -595,14 +595,30 @@ static int new_stream_video(Muxer *mux, const OptionsContext *o,
         return AVERROR(EINVAL);
     }
 
+    MATCH_PER_STREAM_OPT(min_frame_rates, str, min_frame_rate, oc, st);
+    if (min_frame_rate && av_parse_video_rate(&ost->min_frame_rate, min_frame_rate) < 0) {
+        av_log(ost, AV_LOG_FATAL, "Invalid minimum framerate value: %s\n", min_frame_rate);
+        return AVERROR(EINVAL);
+    }
+
     MATCH_PER_STREAM_OPT(max_frame_rates, str, max_frame_rate, oc, st);
     if (max_frame_rate && av_parse_video_rate(&ost->max_frame_rate, max_frame_rate) < 0) {
         av_log(ost, AV_LOG_FATAL, "Invalid maximum framerate value: %s\n", max_frame_rate);
         return AVERROR(EINVAL);
     }
 
+    if (frame_rate && min_frame_rate) {
+        av_log(ost, AV_LOG_ERROR, "Only one of -fpsmin and -r can be set for a stream.\n");
+        return AVERROR(EINVAL);
+    }
+
     if (frame_rate && max_frame_rate) {
         av_log(ost, AV_LOG_ERROR, "Only one of -fpsmax and -r can be set for a stream.\n");
+        return AVERROR(EINVAL);
+    }
+
+    if (min_frame_rate && max_frame_rate && av_q2d(ost->min_frame_rate) > av_q2d(ost->max_frame_rate)) {
+        av_log(NULL, AV_LOG_ERROR, "-fpsmin cannot be larger then -fpsmax.\n");
         return AVERROR(EINVAL);
     }
 
@@ -784,16 +800,16 @@ static int new_stream_video(Muxer *mux, const OptionsContext *o,
                 return ret;
         }
 
-        if ((ost->frame_rate.num || ost->max_frame_rate.num) &&
+        if ((ost->frame_rate.num || ost->min_frame_rate.num || ost->max_frame_rate.num) &&
             !(ost->vsync_method == VSYNC_AUTO ||
               ost->vsync_method == VSYNC_CFR || ost->vsync_method == VSYNC_VSCFR)) {
-            av_log(ost, AV_LOG_FATAL, "One of -r/-fpsmax was specified "
+            av_log(ost, AV_LOG_FATAL, "One of -r/-fpsmin/-fpsmax was specified "
                    "together a non-CFR -vsync/-fps_mode. This is contradictory.\n");
             return AVERROR(EINVAL);
         }
 
         if (ost->vsync_method == VSYNC_AUTO) {
-            if (ost->frame_rate.num || ost->max_frame_rate.num) {
+            if (ost->frame_rate.num || ost->min_frame_rate.num || ost->max_frame_rate.num) {
                 ost->vsync_method = VSYNC_CFR;
             } else if (!strcmp(oc->oformat->name, "avi")) {
                 ost->vsync_method = VSYNC_VFR;

@@ -191,6 +191,7 @@ typedef struct FPSConvContext {
     int               dropped_keyframe;
 
     AVRational        framerate;
+    AVRational        framerate_min;
     AVRational        framerate_max;
     const AVRational *framerate_supported;
     int               framerate_clip;
@@ -802,6 +803,7 @@ int ofilter_bind_ost(OutputFilter *ofilter, OutputStream *ost,
             return AVERROR(ENOMEM);
 
         ofp->fps.framerate           = ost->frame_rate;
+        ofp->fps.framerate_min       = ost->min_frame_rate;
         ofp->fps.framerate_max       = ost->max_frame_rate;
         ofp->fps.framerate_supported = ost->force_fps ?
                                        NULL : c->supported_framerates;
@@ -1949,7 +1951,7 @@ static int choose_out_timebase(OutputFilterPriv *ofp, AVFrame *frame)
     }
 
     if (ofilter->ost->is_cfr) {
-        if (!fr.num && !fps->framerate_max.num) {
+        if (!fr.num && !fps->framerate_min.num && !fps->framerate_max.num) {
             fr = (AVRational){25, 1};
             av_log(ofilter->ost, AV_LOG_WARNING,
                    "No information "
@@ -1957,6 +1959,11 @@ static int choose_out_timebase(OutputFilterPriv *ofp, AVFrame *frame)
                    "back to a default value of 25fps. Use the -r option "
                    "if you want a different framerate.\n");
         }
+
+        if (fps->framerate_min.num &&
+            (av_q2d(fr) < av_q2d(fps->framerate_min) ||
+            !fr.den))
+            fr = fps->framerate_min;
 
         if (fps->framerate_max.num &&
             (av_q2d(fr) > av_q2d(fps->framerate_max) ||
