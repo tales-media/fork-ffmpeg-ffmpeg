@@ -1,0 +1,38 @@
+name: bump
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  bump-versions:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/mwader/bump
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: shio/master
+      - name: bump
+        run: |
+          git config --global --add safe.directory "$PWD"
+
+          export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          export GITHUB_SHA="$(git rev-parse HEAD)"
+          export GITHUB_REF="refs/heads/shio/master"
+          export GITHUB_REF_NAME="shio/master"
+
+          export INPUT_BUMPFILE="Bumpfile"
+          export INPUT_FILES=""
+          export INPUT_TITLE_TEMPLATE="shio: Bump {{.Name}} from {{join .Current \", \"}} to {{.Latest}}"
+          export INPUT_COMMIT_BODY_TEMPLATE="{{range .Messages}}{{.}}{{\"\n\n\"}}{{end}}{{range .Links}}{{.Title}} {{.URL}}{{\"\n\"}}{{end}}"
+          export INPUT_PR_BODY_TEMPLATE="{{range .Messages}}{{.}}{{\"\n\n\"}}{{end}}{{range .Links}}[{{.Title}}]({{.URL}})  {{\"\n\"}}{{end}}"
+          export INPUT_BRANCH_TEMPLATE="bump-{{.Name}}-{{.Latest}}"
+          export INPUT_USER_NAME="bump[bot]"
+          export INPUT_USER_EMAIL="bump[bot]@shio.solutions"
+
+          bump
