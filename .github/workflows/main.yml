@@ -1,0 +1,61 @@
+name: main
+
+on:
+  push:
+    branches:
+      - shio/master
+    tags:
+      - '*_shio.*'
+  pull_request:
+    branches:
+      - shio/master
+
+env:
+  DOCKER_BUILDKIT: 1
+  OCI_REGISTRY: rg.nl-ams.scw.cloud/shio-solutions
+  OCI_REPO: tales-media/fork/ffmpeg
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        if: ${{ github.event_name == 'push' }}
+        with:
+          registry: ${{ env.OCI_REGISTRY }}
+          username: nologin
+          password: ${{ secrets.SCW_SECRET_KEY }}
+
+      - name: build and push OCI images
+        run: |
+          # info
+          docker version
+          docker info
+
+          # version
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            export VERSION="${{ github.ref_name }}"
+          else
+            export VERSION="dev-${{ github.sha }}"
+          fi
+
+          # build
+          docker build --pull --no-cache \
+            -f build/Dockerfile \
+            --build-arg "FFMPEG_VERSION=$VERSION" \
+            -t "${OCI_REGISTRY}/${OCI_REPO}:latest" \
+            -t "${OCI_REGISTRY}/${OCI_REPO}:${{ github.sha }}" \
+            -t "${OCI_REGISTRY}/${OCI_REPO}:$VERSION" \
+            .
+
+          # push
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.ref_name }}" = "shio/master" ]; then
+              docker push "${OCI_REGISTRY}/${OCI_REPO}:latest"
+            fi
+            if [ "${{ github.ref_type }}" = "tag" ]; then
+              docker push "${OCI_REGISTRY}/${OCI_REPO}:$VERSION"
+            fi
+          fi
