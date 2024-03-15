@@ -2,7 +2,7 @@
 
 # bump: alpine /FROM alpine:([\d.]+)/ docker:alpine|^3
 # bump: alpine link "Release notes" https://alpinelinux.org/posts/Alpine-$LATEST-released.html
-FROM alpine:3.19.1 AS builder
+FROM alpine:3.19.1 AS build
 
 RUN apk add --no-cache \
       autoconf \
@@ -98,10 +98,10 @@ ARG TAR_OPTS="--no-same-owner --extract --file"
 ARG ALSA_VERSION=1.2.11
 ARG ALSA_URL="https://www.alsa-project.org/files/pub/lib/alsa-lib-$ALSA_VERSION.tar.bz2"
 ARG ALSA_SHA256=9f3f2f69b995f9ad37359072fbc69a3a88bfba081fc83e9be30e14662795bb4d
+RUN wget $WGET_OPTS -O alsa.tar.bz2 "$ALSA_URL"
+RUN echo "$ALSA_SHA256  alsa.tar.bz2" | sha256sum --status -c -
 RUN \
-  wget $WGET_OPTS -O alsa.tar.bz2 "$ALSA_URL" && \
-  echo "$ALSA_SHA256  alsa.tar.bz2" | sha256sum --status -c - && \
-  tar xf alsa.tar.bz2 && \
+  tar $TAR_OPTS alsa.tar.bz2 && \
   cd alsa-* && ./configure --disable-shared --enable-static && \
   make -j$(nproc) && make install
 
@@ -1005,10 +1005,10 @@ RUN \
   /checkelf /usr/local/bin/ffmpeg && \
   /checkelf /usr/local/bin/ffprobe
 
-FROM scratch AS final1
-COPY --from=builder /versions.json /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /
-COPY --from=builder /usr/local/share/doc/ffmpeg/* /doc/
-COPY --from=builder /etc/ssl/cert.pem /etc/ssl/cert.pem
+FROM scratch AS assembly
+COPY --from=build /versions.json /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /
+COPY --from=build /usr/local/share/doc/ffmpeg/* /doc/
+COPY --from=build /etc/ssl/cert.pem /etc/ssl/cert.pem
 
 # sanity tests
 RUN ["/ffmpeg", "-version"]
@@ -1022,9 +1022,9 @@ RUN ["/ffprobe", "-i", "https://github.com/favicon.ico"]
 RUN ["/ffprobe", "-tls_verify", "1", "-ca_file", "/etc/ssl/cert.pem", "-i", "https://github.com/favicon.ico"]
 
 # clamp all files into one layer
-FROM scratch AS final2
-COPY --from=final1 / /
+FROM scratch AS squash
+COPY --from=assembly / /
 
-FROM final2
-LABEL maintainer="shio solutions GmbH dev@shio.solutions"
+FROM squash
+LABEL maintainer="shio solutions GmbH <dev@shio.solutions>"
 ENTRYPOINT ["/ffmpeg"]
