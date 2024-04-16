@@ -127,9 +127,9 @@ RUN sed -i 's/-lvmaf /-lvmaf -lstdc++ /' /usr/local/lib/pkgconfig/libvmaf.pc
 # bump: aom after cd build && ./hashupdate Dockerfile AOM $LATEST
 # bump: aom after COMMIT=$(git ls-remote https://aomedia.googlesource.com/aom v$LATEST^{} | awk '{print $1}') && sed -i -E "s/^ARG AOM_COMMIT=.*/ARG AOM_COMMIT=$COMMIT/" build/Dockerfile
 # bump: aom link "CHANGELOG" https://aomedia.googlesource.com/aom/+/refs/tags/v$LATEST/CHANGELOG
-ARG AOM_VERSION=3.8.1
+ARG AOM_VERSION=3.8.2
 ARG AOM_URL="https://aomedia.googlesource.com/aom"
-ARG AOM_COMMIT=bb6430482199eaefbeaaa396600935082bc43f66
+ARG AOM_COMMIT=615b5f541e4434aebd993036bc97ebc1a77ebc25
 RUN git clone --depth 1 --branch v$AOM_VERSION "$AOM_URL"
 RUN cd aom && test $(git rev-parse HEAD) = $AOM_COMMIT
 RUN \
@@ -238,7 +238,7 @@ RUN \
 # bump: libgme after cd build && ./hashupdate Dockerfile LIBGME $LATEST
 # bump: libgme link "Source diff $CURRENT..$LATEST" https://github.com/libgme/game-music-emu/compare/$CURRENT..v$LATEST
 ARG LIBGME_URL="https://github.com/libgme/game-music-emu.git"
-ARG LIBGME_COMMIT=6b676192d98302e698ac78fe3c00833eae6a74e5
+ARG LIBGME_COMMIT=c2c31572947840ea306d623849318fbb97232d42
 RUN \
   git clone "$LIBGME_URL" && \
   cd game-music-emu && git checkout $LIBGME_COMMIT && \
@@ -385,9 +385,9 @@ RUN \
 # bump: opus after cd build && ./hashupdate Dockerfile OPUS $LATEST
 # bump: opus link "Release notes" https://github.com/xiph/opus/releases/tag/v$LATEST
 # bump: opus link "Source diff $CURRENT..$LATEST" https://github.com/xiph/opus/compare/v$CURRENT..v$LATEST
-ARG OPUS_VERSION=1.4
+ARG OPUS_VERSION=1.5.2
 ARG OPUS_URL="https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz"
-ARG OPUS_SHA256=c9b32b4253be5ae63d1ff16eea06b94b5f0f2951b7a02aceef58e3a3ce49c51f
+ARG OPUS_SHA256=0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5
 RUN wget $WGET_OPTS -O opus.tar.gz "$OPUS_URL"
 RUN echo "$OPUS_SHA256  opus.tar.gz" | sha256sum --status -c -
 RUN \
@@ -728,8 +728,8 @@ RUN \
 # bump: x265 /X265_VERSION=([[:xdigit:]]+)/ gitrefs:https://bitbucket.org/multicoreware/x265_git.git|re:#^refs/heads/master$#|@commit
 # bump: x265 after cd build && ./hashupdate Dockerfile X265 $LATEST
 # bump: x265 link "Source diff $CURRENT..$LATEST" https://bitbucket.org/multicoreware/x265_git/branches/compare/$LATEST..$CURRENT#diff
-ARG X265_VERSION=74abf80c70a3969fca2e112691cecfb50c0c2259
-ARG X265_SHA256=872a29c240bdd1eb9df429538913e2166840b48b0eff88099148c40a6479b380
+ARG X265_VERSION=dd1ef69b25ec26cc80be0fc8d9afeeef6563762b
+ARG X265_SHA256=8cef03006bedf7691e539d8ccc161fb4f78ed08b9e154c3d53c499f34494bd77
 ARG X265_URL="https://bitbucket.org/multicoreware/x265_git/get/$X265_VERSION.tar.bz2"
 # CMAKEFLAGS issue
 # https://bitbucket.org/multicoreware/x265_git/issues/620/support-passing-cmake-flags-to-multilibsh
@@ -792,9 +792,9 @@ RUN \
 # bump: libjxl after cd build && ./hashupdate Dockerfile LIBJXL $LATEST
 # bump: libjxl link "Changelog" https://github.com/libjxl/libjxl/blob/main/CHANGELOG.md
 # use bundled highway library as its static build is not available in alpine
-ARG LIBJXL_VERSION=0.10.1
+ARG LIBJXL_VERSION=0.10.2
 ARG LIBJXL_URL="https://github.com/libjxl/libjxl/archive/refs/tags/v${LIBJXL_VERSION}.tar.gz"
-ARG LIBJXL_SHA256=91b9a83a230d608b5d35d2ab5068bd0ec7028797575e3013211be5928028c8cd
+ARG LIBJXL_SHA256=d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed
 RUN wget $WGET_OPTS -O libjxl.tar.gz "$LIBJXL_URL"
 RUN echo "$LIBJXL_SHA256  libjxl.tar.gz" | sha256sum --status -c -
 RUN \
