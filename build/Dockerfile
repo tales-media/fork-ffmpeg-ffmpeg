@@ -385,9 +385,9 @@ RUN \
 # bump: opus after cd build && ./hashupdate Dockerfile OPUS $LATEST
 # bump: opus link "Release notes" https://github.com/xiph/opus/releases/tag/v$LATEST
 # bump: opus link "Source diff $CURRENT..$LATEST" https://github.com/xiph/opus/compare/v$CURRENT..v$LATEST
-ARG OPUS_VERSION=1.4
+ARG OPUS_VERSION=1.5.2
 ARG OPUS_URL="https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz"
-ARG OPUS_SHA256=c9b32b4253be5ae63d1ff16eea06b94b5f0f2951b7a02aceef58e3a3ce49c51f
+ARG OPUS_SHA256=0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5
 RUN wget $WGET_OPTS -O opus.tar.gz "$OPUS_URL"
 RUN echo "$OPUS_SHA256  opus.tar.gz" | sha256sum --status -c -
 RUN \
