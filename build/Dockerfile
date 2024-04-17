@@ -185,11 +185,26 @@ RUN \
 ARG LIBBLURAY_VERSION=1.3.4
 ARG LIBBLURAY_URL="https://code.videolan.org/videolan/libbluray/-/archive/$LIBBLURAY_VERSION/libbluray-$LIBBLURAY_VERSION.tar.gz"
 ARG LIBBLURAY_SHA256=9820df5c3e87777be116ca225ad7ee026a3ff42b2447c7fe641910fb23aad3c2
+# TODO: bump config? at least checkout to make commit sticky
+ARG LIBUDFREAD_COMMIT=a35513813819efadca82c4b90edbe1407b1b9e05
+# dec_init rename is to workaround https://code.videolan.org/videolan/libbluray/-/issues/43
 RUN wget $WGET_OPTS -O libbluray.tar.gz "$LIBBLURAY_URL"
 RUN echo "$LIBBLURAY_SHA256  libbluray.tar.gz" | sha256sum --status -c -
 RUN \
-  tar $TAR_OPTS libbluray.tar.gz &&  cd libbluray-* && git clone https://code.videolan.org/videolan/libudfread.git contrib/libudfread && \
-  autoreconf -fiv && ./configure --with-pic --disable-doxygen-doc --disable-doxygen-dot --enable-static --disable-shared --disable-examples --disable-bdjava-jar && \
+  tar $TAR_OPTS libbluray.tar.gz && \
+  cd libbluray-* && \
+  sed -i 's/dec_init/libbluray_dec_init/' src/libbluray/disc/* && \
+  git clone https://code.videolan.org/videolan/libudfread.git contrib/libudfread && \
+  (cd contrib/libudfread && git checkout $LIBUDFREAD_COMMIT) && \
+  autoreconf -fiv && \
+  ./configure \
+    --with-pic \
+    --disable-doxygen-doc \
+    --disable-doxygen-dot \
+    --enable-static \
+    --disable-shared \
+    --disable-examples \
+    --disable-bdjava-jar && \
   make -j$(nproc) install
 
 # bump: dav1d /DAV1D_VERSION=([\d.]+)/ https://code.videolan.org/videolan/dav1d.git|*
@@ -386,8 +401,8 @@ RUN \
 # bump: opus link "Release notes" https://github.com/xiph/opus/releases/tag/v$LATEST
 # bump: opus link "Source diff $CURRENT..$LATEST" https://github.com/xiph/opus/compare/v$CURRENT..v$LATEST
 ARG OPUS_VERSION=1.5.2
-ARG OPUS_URL="https://github.com/xiph/opus/releases/download/v$OPUS_VERSION/opus-$OPUS_VERSION.tar.gz"
-ARG OPUS_SHA256=0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5
+ARG OPUS_URL="https://downloads.xiph.org/releases/opus/opus-$OPUS_VERSION.tar.gz"
+ARG OPUS_SHA256=65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1
 RUN wget $WGET_OPTS -O opus.tar.gz "$OPUS_URL"
 RUN echo "$OPUS_SHA256  opus.tar.gz" | sha256sum --status -c -
 RUN \
@@ -794,7 +809,7 @@ RUN \
 # use bundled highway library as its static build is not available in alpine
 ARG LIBJXL_VERSION=0.10.2
 ARG LIBJXL_URL="https://github.com/libjxl/libjxl/archive/refs/tags/v${LIBJXL_VERSION}.tar.gz"
-ARG LIBJXL_SHA256=d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed
+ARG LIBJXL_SHA256=95e807f63143856dc4d161c071cca01115d2c6405b3d3209854ac6989dc6bb91
 RUN wget $WGET_OPTS -O libjxl.tar.gz "$LIBJXL_URL"
 RUN echo "$LIBJXL_SHA256  libjxl.tar.gz" | sha256sum --status -c -
 RUN \
@@ -864,6 +879,7 @@ RUN \
   --enable-libfribidi \
   --enable-libgme \
   --enable-libgsm \
+  --enable-libharfbuzz \
   --enable-libkvazaar \
   --enable-libmodplug \
   --enable-libmp3lame \
@@ -909,12 +925,13 @@ RUN \
   FONTCONFIG_VERSION=$(pkg-config --modversion fontconfig)  \
   FREETYPE_VERSION=$(pkg-config --modversion freetype2)  \
   FRIBIDI_VERSION=$(pkg-config --modversion fribidi)  \
+  LIBHARFBUZZ_VERSION=$(pkg-config --modversion harfbuzz) \
   LIBSAMPLERATE_VERSION=$(pkg-config --modversion samplerate) \
+  LIBVO_AMRWBENC_VERSION=$(pkg-config --modversion vo-amrwbenc) \
   LIBXML2_VERSION=$(pkg-config --modversion libxml-2.0) \
   OPENSSL_VERSION=$(pkg-config --modversion openssl) \
-  SOXR_VERSION=$(pkg-config --modversion soxr) \
-  LIBVO_AMRWBENC_VERSION=$(pkg-config --modversion vo-amrwbenc) \
   SNAPPY_VERSION=$(apk info -a snappy | head -n1 | awk '{print $1}' | sed -e 's/snappy-//') \
+  SOXR_VERSION=$(pkg-config --modversion soxr) \
   jq -n \
   '{ \
   alsa: env.ALSA_VERSION, \
@@ -934,6 +951,8 @@ RUN \
   libfribidi: env.FRIBIDI_VERSION, \
   libgme: env.LIBGME_COMMIT, \
   libgsm: env.LIBGSM_COMMIT, \
+  libharfbuzz: env.LIBHARFBUZZ_VERSION, \
+  libjxl: env.LIBJXL_VERSION, \
   libkvazaar: env.KVAZAAR_VERSION, \
   libmodplug: env.LIBMODPLUG_VERSION, \
   libmp3lame: env.MP3LAME_VERSION, \
@@ -948,8 +967,8 @@ RUN \
   librubberband: env.RUBBERBAND_VERSION, \
   libsamplerate: env.LIBSAMPLERATE_VERSION, \
   libshine: env.LIBSHINE_VERSION, \
-  libsoxr: env.SOXR_VERSION, \
   libsnappy: env.SNAPPY_VERSION, \
+  libsoxr: env.SOXR_VERSION, \
   libspeex: env.SPEEX_VERSION, \
   libsrt: env.SRT_VERSION, \
   libssh: env.LIBSSH_VERSION, \
@@ -969,7 +988,6 @@ RUN \
   libxml2: env.LIBXML2_VERSION, \
   libxvid: env.XVID_VERSION, \
   libzimg: env.ZIMG_VERSION, \
-  libjxl: env.LIBJXL_VERSION, \
   openssl: env.OPENSSL_VERSION, \
   }' > /versions.json
 
