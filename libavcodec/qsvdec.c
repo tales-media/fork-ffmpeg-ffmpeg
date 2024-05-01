@@ -50,6 +50,7 @@
 #include "hwconfig.h"
 #include "qsv.h"
 #include "qsv_internal.h"
+#include "refstruct.h"
 
 #if QSV_ONEVPL
 #include <mfxdispatcher.h>
@@ -439,6 +440,11 @@ static int qsv_decode_header(AVCodecContext *avctx, QSVContext *q,
 
     param->ExtParam    = q->ext_buffers;
     param->NumExtParam = q->nb_ext_buffers;
+
+    if (param->mfx.FrameInfo.FrameRateExtN == 0 || param->mfx.FrameInfo.FrameRateExtD == 0) {
+        param->mfx.FrameInfo.FrameRateExtN = 25;
+        param->mfx.FrameInfo.FrameRateExtD = 1;
+    }
 
 #if QSV_VERSION_ATLEAST(1, 34)
     if (QSV_RUNTIME_VERSION_ATLEAST(q->ver, 1, 34) && avctx->codec_id == AV_CODEC_ID_AV1)
@@ -885,7 +891,7 @@ static void qsv_decode_close_qsvcontext(QSVContext *q)
     ff_qsv_close_internal_session(&q->internal_qs);
 
     av_buffer_unref(&q->frames_ctx.hw_frames_ctx);
-    av_buffer_unref(&q->frames_ctx.mids_buf);
+    ff_refstruct_unref(&q->frames_ctx.mids);
     av_buffer_pool_uninit(&q->pool);
 }
 

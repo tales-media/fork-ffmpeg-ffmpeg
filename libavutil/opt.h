@@ -53,6 +53,16 @@
  * question is allowed to access the field. This allows us to extend the
  * semantics of those fields without breaking API compatibility.
  *
+ * @section avoptions_scope Scope of AVOptions
+ *
+ * AVOptions is designed to support any set of multimedia configuration options
+ * that can be defined at compile-time.  Although it is mainly used to expose
+ * FFmpeg options, you are welcome to adapt it to your own use case.
+ *
+ * No single approach can ever fully solve the problem of configuration,
+ * but please submit a patch if you believe you have found a problem
+ * that is best solved by extending AVOptions.
+ *
  * @section avoptions_implement Implementing AVOptions
  * This section describes how to add AVOptions capabilities to a struct.
  *
@@ -929,6 +939,7 @@ int av_opt_flag_is_set(void *obj, const char *field_name, const char *flag_name)
 
 #define AV_OPT_SERIALIZE_SKIP_DEFAULTS              0x00000001  ///< Serialize options that are not set to default values only.
 #define AV_OPT_SERIALIZE_OPT_FLAGS_EXACT            0x00000002  ///< Serialize options that exactly match opt_flags only.
+#define AV_OPT_SERIALIZE_SEARCH_CHILDREN            0x00000004  ///< Serialize options in possible children of the given object.
 
 /**
  * Serialize object's options.
