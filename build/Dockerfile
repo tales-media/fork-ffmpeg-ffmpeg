@@ -2,7 +2,7 @@
 
 # bump: alpine /FROM alpine:([\d.]+)/ docker:alpine|^3
 # bump: alpine link "Release notes" https://alpinelinux.org/posts/Alpine-$LATEST-released.html
-FROM alpine:3.19.1 AS build
+FROM alpine:3.20.0 AS build
 
 RUN apk add --no-cache \
       autoconf \
