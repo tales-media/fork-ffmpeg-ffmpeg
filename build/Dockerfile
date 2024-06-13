@@ -210,9 +210,9 @@ RUN \
 # bump: dav1d /DAV1D_VERSION=([\d.]+)/ https://code.videolan.org/videolan/dav1d.git|*
 # bump: dav1d after cd build && ./hashupdate Dockerfile DAV1D $LATEST
 # bump: dav1d link "Release notes" https://code.videolan.org/videolan/dav1d/-/tags/$LATEST
-ARG DAV1D_VERSION=1.4.1
+ARG DAV1D_VERSION=1.4.3
 ARG DAV1D_URL="https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VERSION/dav1d-$DAV1D_VERSION.tar.gz"
-ARG DAV1D_SHA256=04da7689748a3501d00b6796b6de0596177019709ecc6095c667b7964895dd8c
+ARG DAV1D_SHA256=88a023e58d955e0886faf49c72940e0e90914a948a8e60c1326ce3e09e7a6099
 RUN wget $WGET_OPTS -O dav1d.tar.gz "$DAV1D_URL"
 RUN echo "$DAV1D_SHA256  dav1d.tar.gz" | sha256sum --status -c -
 RUN \
