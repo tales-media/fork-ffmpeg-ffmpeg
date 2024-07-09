@@ -191,14 +191,12 @@ static void bs_tl_init(TabList *l, VVCFrameContext *fc)
 
     tl_init(l, 1, changed);
 
-    for (int i = 0; i < VVC_MAX_SAMPLE_ARRAYS; i++) {
-        TL_ADD(horizontal_bs[i], bs_count);
-        TL_ADD(vertical_bs[i],   bs_count);
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < VVC_MAX_SAMPLE_ARRAYS; j++)
+            TL_ADD(bs[i][j], bs_count);
+        TL_ADD(max_len_p[i], bs_count);
+        TL_ADD(max_len_q[i], bs_count);
     }
-    TL_ADD(horizontal_q, bs_count);
-    TL_ADD(horizontal_p, bs_count);
-    TL_ADD(vertical_p,   bs_count);
-    TL_ADD(vertical_q,   bs_count);
 }
 
 static void pixel_buffer_nz_tl_init(TabList *l, VVCFrameContext *fc)
@@ -214,7 +212,8 @@ static void pixel_buffer_nz_tl_init(TabList *l, VVCFrameContext *fc)
     const int c_end      = chroma_idc ? VVC_MAX_SAMPLE_ARRAYS : 1;
     const int changed    = fc->tab.sz.chroma_format_idc != chroma_idc ||
         fc->tab.sz.width != width || fc->tab.sz.height != height ||
-        fc->tab.sz.ctu_width != ctu_width || fc->tab.sz.ctu_height != ctu_height;
+        fc->tab.sz.ctu_width != ctu_width || fc->tab.sz.ctu_height != ctu_height ||
+        fc->tab.sz.pixel_shift != ps;
 
     tl_init(l, 0, changed);
 
@@ -403,8 +402,8 @@ static int8_t smvd_find(const VVCFrameContext *fc, const SliceContext *sc, int l
     int8_t idx                    = -1;
     int old_diff                  = -1;
     for (int i = 0; i < rsh->num_ref_idx_active[lx]; i++) {
-        if (!rpl->isLongTerm[i]) {
-            int diff = poc - rpl->list[i];
+        if (!rpl->refs[i].is_lt) {
+            int diff = poc - rpl->refs[i].poc;
             if (find(idx, diff, old_diff)) {
                 idx = i;
                 old_diff = diff;
@@ -477,13 +476,14 @@ static int slices_realloc(VVCFrameContext *fc)
     return 0;
 }
 
-static void ep_init_cabac_decoder(SliceContext *sc, const int index,
+static int ep_init_cabac_decoder(SliceContext *sc, const int index,
     const H2645NAL *nal, GetBitContext *gb, const CodedBitstreamUnit *unit)
 {
     const H266RawSlice *slice     = unit->content_ref;
     const H266RawSliceHeader *rsh = sc->sh.r;
     EntryPoint *ep                = sc->eps + index;
     int size;
+    int ret;
 
     if (index < rsh->num_entry_points) {
         int skipped = 0;
@@ -502,8 +502,11 @@ static void ep_init_cabac_decoder(SliceContext *sc, const int index,
         size = get_bits_left(gb) / 8;
     }
     av_assert0(gb->buffer + get_bits_count(gb) / 8 + size <= gb->buffer_end);
-    ff_init_cabac_decoder (&ep->cc, gb->buffer + get_bits_count(gb) / 8, size);
+    ret = ff_init_cabac_decoder (&ep->cc, gb->buffer + get_bits_count(gb) / 8, size);
+    if (ret < 0)
+        return ret;
     skip_bits(gb, size * 8);
+    return 0;
 }
 
 static int slice_init_entry_points(SliceContext *sc,
@@ -514,6 +517,7 @@ static int slice_init_entry_points(SliceContext *sc,
     int nb_eps                = sh->r->num_entry_points + 1;
     int ctu_addr              = 0;
     GetBitContext gb;
+    int ret;
 
     if (sc->nb_eps != nb_eps) {
         eps_free(sc);
@@ -523,7 +527,9 @@ static int slice_init_entry_points(SliceContext *sc,
         sc->nb_eps = nb_eps;
     }
 
-    init_get_bits8(&gb, slice->data, slice->data_size);
+    ret = init_get_bits8(&gb, slice->data, slice->data_size);
+    if (ret < 0)
+        return ret;
     for (int i = 0; i < sc->nb_eps; i++)
     {
         EntryPoint *ep = sc->eps + i;
@@ -536,7 +542,9 @@ static int slice_init_entry_points(SliceContext *sc,
             fc->tab.slice_idx[rs] = sc->slice_idx;
         }
 
-        ep_init_cabac_decoder(sc, i, nal, &gb, unit);
+        ret = ep_init_cabac_decoder(sc, i, nal, &gb, unit);
+        if (ret < 0)
+            return ret;
 
         if (i + 1 < sc->nb_eps)
             ctu_addr = sh->entry_point_start_ctu[i];
@@ -560,6 +568,9 @@ static int ref_frame(VVCFrame *dst, const VVCFrame *src)
     if (ret < 0)
         return ret;
 
+    ff_refstruct_replace(&dst->sps, src->sps);
+    ff_refstruct_replace(&dst->pps, src->pps);
+
     ff_refstruct_replace(&dst->progress, src->progress);
 
     ff_refstruct_replace(&dst->tab_dmvr_mvf, src->tab_dmvr_mvf);
@@ -570,6 +581,11 @@ static int ref_frame(VVCFrame *dst, const VVCFrame *src)
 
     dst->poc = src->poc;
     dst->ctb_count = src->ctb_count;
+
+    dst->scaling_win = src->scaling_win;
+    dst->ref_width   = src->ref_width;
+    dst->ref_height  = src->ref_height;
+
     dst->flags = src->flags;
     dst->sequence = src->sequence;
 
@@ -825,7 +841,6 @@ static int decode_nal_units(VVCContext *s, VVCFrameContext *fc, AVPacket *avpkt)
     const CodedBitstreamH266Context *h266 = s->cbc->priv_data;
     CodedBitstreamFragment *frame         = &s->current_frame;
     int ret = 0;
-    int eos_at_start = 1;
     s->last_eos = s->eos;
     s->eos = 0;
 
@@ -841,10 +856,7 @@ static int decode_nal_units(VVCContext *s, VVCFrameContext *fc, AVPacket *avpkt)
         const CodedBitstreamUnit *unit = frame->units + i;
 
         if (unit->type == VVC_EOB_NUT || unit->type == VVC_EOS_NUT) {
-            if (eos_at_start)
-                s->last_eos = 1;
-            else
-                s->eos = 1;
+            s->last_eos = 1;
         } else {
             ret = decode_nal_unit(s, fc, nal, unit);
             if (ret < 0) {
@@ -893,10 +905,16 @@ static int wait_delayed_frame(VVCContext *s, AVFrame *output, int *got_output)
 
 static int submit_frame(VVCContext *s, VVCFrameContext *fc, AVFrame *output, int *got_output)
 {
-    int ret;
+    int ret = ff_vvc_frame_submit(s, fc);
+
+    if (ret < 0) {
+        ff_vvc_report_frame_finished(fc->ref);
+        return ret;
+    }
+
     s->nb_frames++;
     s->nb_delayed++;
-    ff_vvc_frame_submit(s, fc);
+
     if (s->nb_delayed >= s->nb_fcs) {
         if ((ret = wait_delayed_frame(s, output, got_output)) < 0)
             return ret;
@@ -1006,7 +1024,7 @@ static av_cold int vvc_decode_init(AVCodecContext *avctx)
     static AVOnce init_static_once = AV_ONCE_INIT;
     const int cpu_count            = av_cpu_count();
     const int delayed              = FFMIN(cpu_count, VVC_MAX_DELAYED_FRAMES);
-    const int thread_count         = avctx->thread_count ? avctx->thread_count : delayed;
+    int thread_count               = avctx->thread_count ? avctx->thread_count : delayed;
     int ret;
 
     s->avctx = avctx;
@@ -1033,6 +1051,8 @@ static av_cold int vvc_decode_init(AVCodecContext *avctx)
             return ret;
     }
 
+    if (thread_count == 1)
+        thread_count = 0;
     s->executor = ff_vvc_executor_alloc(s, thread_count);
     if (!s->executor)
         return AVERROR(ENOMEM);
