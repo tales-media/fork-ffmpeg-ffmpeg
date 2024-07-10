@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.4
 
-# bump: alpine /ALPINE_VERSION=docker.io/library/alpine:([\d.]+)/ docker:alpine|^3
+# bump: alpine /ALPINE_VERSION=docker.io\/library\/alpine:([\d.]+)/ docker:alpine|^3
 # bump: alpine link "Release notes" https://alpinelinux.org/posts/Alpine-$LATEST-released.html
 ARG ALPINE_VERSION=docker.io/library/alpine:3.20.1
 FROM $ALPINE_VERSION AS build
