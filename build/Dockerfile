@@ -371,7 +371,7 @@ RUN \
 # bump: libgme after cd build && ./hashupdate Dockerfile LIBGME $LATEST
 # bump: libgme link "Source diff $CURRENT..$LATEST" https://github.com/libgme/game-music-emu/compare/$CURRENT..v$LATEST
 ARG LIBGME_URL="https://github.com/libgme/game-music-emu.git"
-ARG LIBGME_COMMIT=ee45d3d9df275dfcf89c0e764477e106c46f996c
+ARG LIBGME_COMMIT=e429a1ee57756473ed13beb706dd21ad771756ab
 RUN \
   git clone "$LIBGME_URL" && \
   cd game-music-emu && git checkout --recurse-submodules $LIBGME_COMMIT && \
