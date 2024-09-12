@@ -21,7 +21,7 @@ jobs:
         run: |
           git config --global --add safe.directory "$PWD"
 
-          export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          export GITHUB_TOKEN="${{ secrets.BUMP_TOKEN }}"
           export GITHUB_SHA="$(git rev-parse HEAD)"
           export GITHUB_REF="refs/heads/shio/master"
           export GITHUB_REF_NAME="shio/master"
