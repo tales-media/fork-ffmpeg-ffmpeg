@@ -1038,7 +1038,7 @@ RUN \
 # use bundled highway library as its static build is not available in alpine
 ARG LIBJXL_VERSION=0.11.0
 ARG LIBJXL_URL="https://github.com/libjxl/libjxl/archive/refs/tags/v${LIBJXL_VERSION}.tar.gz"
-ARG LIBJXL_SHA256=d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed
+ARG LIBJXL_SHA256=7ce4ec8bb37a435a73ac18c4c9ff56c2dc6c98892bf3f53a328e3eca42efb9cf
 RUN \
   wget $WGET_OPTS -O libjxl.tar.gz "$LIBJXL_URL" && \
   echo "$LIBJXL_SHA256  libjxl.tar.gz" | sha256sum -c - && \
