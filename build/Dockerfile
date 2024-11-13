@@ -921,8 +921,8 @@ RUN \
 # bump: x265 /X265_VERSION=([[:xdigit:]]+)/ gitrefs:https://bitbucket.org/multicoreware/x265_git.git|re:#^refs/heads/master$#|@commit
 # bump: x265 after cd build && ./hashupdate Dockerfile X265 $LATEST
 # bump: x265 link "Source diff $CURRENT..$LATEST" https://bitbucket.org/multicoreware/x265_git/branches/compare/$LATEST..$CURRENT#diff
-ARG X265_VERSION=7b5332d9df9a26204861009a9d68f28a2898e3ea
-ARG X265_SHA256=d2f719ae301cd395c918250ea5717c9c19451107f0c29dc19052202db367da52
+ARG X265_VERSION=7cc403076ca22c40c5ac930126753230043eefa0
+ARG X265_SHA256=824b644a4e5298145b6421e950d91edad05618a0444fdcb3b8ce7c3044392573
 ARG X265_URL="https://bitbucket.org/multicoreware/x265_git/get/$X265_VERSION.tar.bz2"
 # CMAKEFLAGS issue
 # https://bitbucket.org/multicoreware/x265_git/issues/620/support-passing-cmake-flags-to-multilibsh
