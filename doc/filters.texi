@@ -577,6 +577,11 @@ The cross fade is applied for specified duration near the end of first stream.
 The filter accepts the following options:
 
 @table @option
+@item inputs, n
+Specify the number of inputs to crossfade. When crossfading multiple inputs,
+each input will be concatenated and crossfaded in sequence, similar to the
+@ref{concat filter}. Default is 2.
+
 @item nb_samples, ns
 Specify the number of samples for which the cross fade effect has to last.
 At the end of the cross fade effect the first input audio will be completely
@@ -614,6 +619,11 @@ ffmpeg -i first.flac -i second.flac -filter_complex acrossfade=d=10:c1=exp:c2=ex
 Cross fade from one input to another but without overlapping:
 @example
 ffmpeg -i first.flac -i second.flac -filter_complex acrossfade=d=10:o=0:c1=exp:c2=exp output.flac
+@end example
+
+Concatenate multiple inputs with cross fade between each:
+@example
+ffmpeg -i first.flac -i second.flac -i third.flac -filter_complex acrossfade=n=3 output.flac
 @end example
 @end itemize
 
@@ -9880,7 +9890,7 @@ which indicates that this is a full range YUV source.
 @item alpha_mode
 Detect if the source contains color values above the alpha channel, which
 indicates that the alpha channel is independent (straight), rather than
-premultiplied.
+premultiplied. Also detects if the alpha plane is fully opaque or not.
 @item all
 Enable detection of all of the above properties. This is the default.
 @end table
@@ -14307,6 +14317,10 @@ A '|'-separated list of color space names, such as
 A '|'-separated list of color range names, such as
 "color_ranges=tv|pc".
 
+@item alpha_modes
+A '|'-separated list of color range names, such as
+"alpha_modes=straight|premultiplied".
+
 @end table
 
 @subsection Examples
@@ -16517,6 +16531,10 @@ leading to no change. For any other value, conversion will be performed.
 
 See the @ref{setparams} filter for a list of possible values.
 
+@item alpha_mode
+Choose the desired output alpha mode, when the output format has an alpha
+channel. See the @ref{setparams} filter for a list of possible values.
+
 @item apply_filmgrain
 Apply film grain (e.g. AV1 or H.274) if present in source frames, and strip
 it from the output. Enabled by default.
@@ -16654,6 +16672,8 @@ No deinterlacing, weave fields together into a single frame. This is the default
 Naive bob deinterlacing, simply repeat each field line twice.
 @item yadif
 Yet another deinterlacing filter. See the @ref{yadif} filter for more details.
+@item bwdif
+Bob weaver deinterlacing filter. See the @ref{bwdif} filter for more details.
 @end table
 
 @item skip_spatial_check
@@ -18865,7 +18885,8 @@ See @ref{framesync}.
 
 @item alpha
 Set format of alpha of the overlaid video, it can be @var{straight} or
-@var{premultiplied}. Default is @var{straight}.
+@var{premultiplied}, or @var{auto} to choose the alpha mode automatically.
+Default is @var{auto}.
 @end table
 
 The @option{x}, and @option{y} expressions can contain the following
@@ -19624,6 +19645,20 @@ By default value 0xf, all planes will be processed.
 
 @item inplace
 Do not require 2nd input for processing, instead use alpha plane from input stream.
+@end table
+
+@section premultiply_dynamic
+Dynamically premultiply or unpremultiply the input video stream as needed,
+to match the requirements of the downstream filter graph. This is roughly
+equivalent to either @code{premultiply:inplace=yes} or
+@code{unpremultiply:inplace=yes}, or otherwise a noop.
+
+The filter accepts the following option:
+
+@table @option
+@item planes
+Set which planes will be processed, unprocessed planes will be copied.
+By default value 0xf, all planes will be processed.
 @end table
 
 @section prewitt
@@ -21737,6 +21772,19 @@ Keep the same chroma location (default).
 @item top
 @item bottomleft
 @item bottom
+@end table
+
+@item alpha_mode
+Set the alpha moda.
+Available values are:
+
+@table @samp
+@item auto
+Keep the same alpha mode (default).
+
+@item unspecified, unknown
+@item premultiplied
+@item straight
 @end table
 @end table
 
@@ -28755,6 +28803,10 @@ Allocates linear images. Does not apply to decoding.
 
 @item disable_multiplane
 Disables multiplane images. Does not apply to decoding.
+
+@item avoid_host_import
+Avoids the use of dynamic host memory imports, in favor of a regular memcpy()
+into a previously mapped buffer.
 @end table
 
 @item -filter_hw_device @var{name}
@@ -29256,6 +29308,11 @@ name.
 @item range
 A string representing the color range of the buffered video frames.
 It may be a number corresponding to a color range, or a color range
+name.
+
+@item alpha_mode
+A string representing the alpha mode of the buffered video frames.
+It may be a number corresponding to an alpha mode, or an alpha mode
 name.
 
 @item pixel_aspect, sar
@@ -30961,6 +31018,7 @@ bench=start,selectivecolor=reds=-.2 .12 -.49,bench=stop
 @end example
 @end itemize
 
+@anchor{concat filter}
 @section concat
 
 Concatenate audio and video streams, joining them together one after the
@@ -31907,9 +31965,9 @@ This filter accepts the following options:
 The expression which is evaluated for each frame to construct its timestamp.
 
 @item strip_fps (@emph{video only})
-Boolean option which determines if the original framerate metadata is unset.
-If set to true, be advised that a sane frame rate should be explicitly
-specified if output is sent to a constant frame rate muxer.
+Boolean option which determines if the original framerate and frame duration
+metadata is unset. If set to true, be advised that a sane frame rate should be
+explicitly specified if output is sent to a constant frame rate muxer.
 Default is @code{false}.
 
 @end table
