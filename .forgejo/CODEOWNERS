@@ -14,7 +14,7 @@ libavcodec/.*aac.* @lynne
 libavcodec/.*ac3.* @lynne
 libavcodec/.*adpcm.* @zane @pross
 libavcodec/anm.* @pross
-libavcodec/amf.* @OvchinnikovDmitrii
+libavcodec/amf.* @OvchinnikovDmitrii @ArazIusubov
 libavcodec/ansi.* @pross
 libavcodec/aom_film_grain.* @haasn
 libavcodec/.*atrac9.* @lynne
@@ -82,6 +82,7 @@ libavcodec/bsf/smpte436m_to_eia608.* @programmerjake
 libavcodec/aarch64/.* @lynne @mstorsjo
 libavcodec/arm/.* @mstorsjo
 libavcodec/ppc/.* @sean_mcg
+libavcodec/riscv/.* @Courmisch
 libavcodec/wasm/hevc/.* @quink
 libavcodec/x86/.* @lynne
 libavcodec/x86/vp8.* @rbultje
@@ -91,7 +92,7 @@ libavcodec/x86/vpx.* @rbultje
 # avfilter
 # =======
 libavfilter/af_whisper.* @vpalmisano
-libavfilter/.*_amf* @OvchinnikovDmitrii
+libavfilter/.*_amf* @OvchinnikovDmitrii @ArazIusubov
 libavfilter/avfiltergraph.* @haasn
 libavfilter/colorspace.* @rbultje
 libavfilter/formats.* @haasn
@@ -99,6 +100,7 @@ libavfilter/.*f_ebur128.* @haasn
 libavfilter/vf_blackdetect.* @haasn
 libavfilter/vf_colordetect.* @haasn
 libavfilter/vf_colorspace.* @rbultje
+libavfilter/.*drawvg.* @ayosec
 libavfilter/vf_icc.* @haasn
 libavfilter/vf_libplacebo.* @haasn
 libavfilter/vf_premultiply.* @haasn
@@ -110,6 +112,7 @@ libavfilter/vf_yadif.* @michaelni
 libavfilter/vsrc_mandelbrot.* @michaelni
 
 libavfilter/aarch64/.* @mstorsjo
+libavfilter/riscv/.* @Courmisch
 libavfilter/x86/colorspace.* @rbultje
 libavfilter/x86/scene_sad.* @haasn
 
@@ -153,7 +156,7 @@ libavformat/wtv.* @pross
 
 # avutil
 # ======
-libavutil/.*_amf* @OvchinnikovDmitrii
+libavutil/.*_amf* @OvchinnikovDmitrii @ArazIusubov
 libavutil/.*crc.* @lynne @michaelni
 libavutil/.*d3d12va.* @jianhuaw @tong1wu
 libavutil/csp.* @rbultje @haasn
@@ -180,6 +183,7 @@ libavutil/tx.* @lynne
 libavutil/aarch64/.* @lynne @mstorsjo
 libavutil/arm/.* @mstorsjo
 libavutil/ppc/.* @sean_mcg
+libavutil/riscv/.* @Courmisch
 libavutil/x86/.* @lynne
 
 # swresample
@@ -193,6 +197,7 @@ libswresample/.* @michaelni
 libswscale/aarch64/.* @mstorsjo
 libswscale/arm/.* @mstorsjo
 libswscale/ppc/.* @sean_mcg
+libswscale/riscv/.* @Courmisch
 libswscale/.* @haasn
 
 # tools
@@ -210,4 +215,6 @@ doc/.* @GyanD
 
 # tests
 # =====
+tests/checkasm/riscv/.* @Courmisch
+tests/ref/.*drawvg.* @ayosec
 tests/ref/fate/sub-mcc.* @programmerjake
