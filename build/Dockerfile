@@ -1087,9 +1087,9 @@ RUN \
 # bump: libva /LIBVA_VERSION=([\d.]+)/ https://github.com/intel/libva.git|^2
 # bump: libva after cd build && ./hashupdate Dockerfile LIBVA $LATEST
 # bump: libva link "Changelog" https://github.com/intel/libva/blob/master/NEWS
-ARG LIBVA_VERSION=2.22.0
+ARG LIBVA_VERSION=2.23.0
 ARG LIBVA_URL="https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz"
-ARG LIBVA_SHA256=467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735
+ARG LIBVA_SHA256=d5558cd419c8d46bdc958064cb97f963d1ea793866414c025906ec15033512ed
 RUN \
   wget $WGET_OPTS -O libva.tar.gz "$LIBVA_URL" && \
   echo "$LIBVA_SHA256  libva.tar.gz" | sha256sum -c - && \
