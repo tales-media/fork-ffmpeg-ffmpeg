@@ -2,7 +2,7 @@
 
 # bump: alpine /ALPINE_VERSION=docker.io\/library\/alpine:([\d.]+)/ docker:alpine|^3
 # bump: alpine link "Release notes" https://alpinelinux.org/posts/Alpine-$LATEST-released.html
-ARG ALPINE_VERSION=docker.io/library/alpine:3.20.8
+ARG ALPINE_VERSION=docker.io/library/alpine:3.20.9
 FROM $ALPINE_VERSION AS build
 
 # Alpine Package Keeper options
@@ -579,8 +579,6 @@ RUN \
   wget $WGET_OPTS -O rav1e.tar.gz "$RAV1E_URL" && \
   echo "$RAV1E_SHA256  rav1e.tar.gz" | sha256sum -c - && \
   tar $TAR_OPTS rav1e.tar.gz && cd rav1e-* && \
-  # workaround weird cargo problem when on aws (?) weirdly alpine edge seems to work
-  CARGO_REGISTRIES_CRATES_IO_PROTOCOL="sparse" \
   RUSTFLAGS="-C target-feature=+crt-static" \
   cargo cinstall --release
 
@@ -1087,9 +1085,9 @@ RUN \
 # bump: libva /LIBVA_VERSION=([\d.]+)/ https://github.com/intel/libva.git|^2
 # bump: libva after cd build && ./hashupdate Dockerfile LIBVA $LATEST
 # bump: libva link "Changelog" https://github.com/intel/libva/blob/master/NEWS
-ARG LIBVA_VERSION=2.22.0
+ARG LIBVA_VERSION=2.23.0
 ARG LIBVA_URL="https://github.com/intel/libva/archive/refs/tags/${LIBVA_VERSION}.tar.gz"
-ARG LIBVA_SHA256=467c418c2640a178c6baad5be2e00d569842123763b80507721ab87eb7af8735
+ARG LIBVA_SHA256=b10aceb30e93ddf13b2030eb70079574ba437be9b3b76065caf28a72c07e23e7
 RUN \
   wget $WGET_OPTS -O libva.tar.gz "$LIBVA_URL" && \
   echo "$LIBVA_SHA256  libva.tar.gz" | sha256sum -c - && \
@@ -1109,9 +1107,9 @@ RUN \
 # bump: libvpl /LIBVPL_VERSION=([\d.]+)/ https://github.com/intel/libvpl.git|^2
 # bump: libvpl after cd build && ./hashupdate Dockerfile LIBVPL $LATEST
 # bump: libvpl link "Changelog" https://github.com/intel/libvpl/blob/main/CHANGELOG.md
-ARG LIBVPL_VERSION=2.14.0
+ARG LIBVPL_VERSION=2.16.0
 ARG LIBVPL_URL="https://github.com/intel/libvpl/archive/refs/tags/v${LIBVPL_VERSION}.tar.gz"
-ARG LIBVPL_SHA256=7c6bff1c1708d910032c2e6c44998ffff3f5fdbf06b00972bc48bf2dd9e5ac06
+ARG LIBVPL_SHA256=d60931937426130ddad9f1975c010543f0da99e67edb1c6070656b7947f633b6
 RUN \
   wget $WGET_OPTS -O libvpl.tar.gz "$LIBVPL_URL" && \
   echo "$LIBVPL_SHA256  libvpl.tar.gz" | sha256sum -c - && \
@@ -1127,6 +1125,8 @@ RUN \
     -DENABLE_WARNING_AS_ERROR=ON && \
   cmake --build build -j$(nproc) && \
   cmake --install build
+# not sure why this is needed, used to work
+RUN sed -i 's/-lvpl /-lvpl -lstdc++ /' /usr/local/lib/pkgconfig/vpl.pc
 
 # bump: vvenc /VVENC_VERSION=([\d.]+)/ https://github.com/fraunhoferhhi/vvenc.git|*
 # bump: vvenc after cd build && ./hashupdate Dockerfile VVENC $LATEST
