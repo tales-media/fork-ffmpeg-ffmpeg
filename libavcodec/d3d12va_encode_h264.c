@@ -224,6 +224,17 @@ static int d3d12va_encode_h264_init_sequence_params(AVCodecContext *avctx)
         av_log(avctx, AV_LOG_DEBUG, "ROI encoding not supported by hardware for current rate control mode \n");
     }
 
+    // Check motion estimation precision mode support
+    if (ctx->me_precision != D3D12_VIDEO_ENCODER_MOTION_ESTIMATION_PRECISION_MODE_MAXIMUM) {
+        if (!(support.SupportFlags & D3D12_VIDEO_ENCODER_SUPPORT_FLAG_MOTION_ESTIMATION_PRECISION_MODE_LIMIT_AVAILABLE)) {
+            av_log(avctx, AV_LOG_ERROR, "Hardware does not support motion estimation "
+                "precision mode limits.\n");
+            return AVERROR(ENOTSUP);
+        }
+        av_log(avctx, AV_LOG_VERBOSE, "Hardware supports motion estimation "
+            "precision mode limits.\n");
+    }
+
     desc = av_pix_fmt_desc_get(base_ctx->input_frames->sw_format);
     av_assert0(desc);
 
@@ -629,10 +640,7 @@ static const AVOption d3d12va_encode_h264_options[] = {
 #undef LEVEL
 
     { "deblock", "Deblocking filter mode",
-      OFFSET(deblock), AV_OPT_TYPE_INT, { .i64 = -1 }, -1, 1, FLAGS, "deblock" },
-        { "auto",    "Default (enabled)",         0, AV_OPT_TYPE_CONST, { .i64 = -1 }, 0, 0, FLAGS, "deblock" },
-        { "disable", "Disable deblocking filter", 0, AV_OPT_TYPE_CONST, { .i64 = 0 },  0, 0, FLAGS, "deblock" },
-        { "enable",  "Enable deblocking filter",  0, AV_OPT_TYPE_CONST, { .i64 = 1 },  0, 0, FLAGS, "deblock" },
+      OFFSET(deblock), AV_OPT_TYPE_BOOL, { .i64 = -1 }, -1, 1, FLAGS },
 
     { NULL },
 };
