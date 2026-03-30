@@ -52,13 +52,16 @@ mask2: times 32 db 0x03
 mask3: times 32 db 0x07
 mask4: times 32 db 0x0F
 
+const1b equ mask1
+const1w: times 16 dw 0x01
+
 SECTION .text
 
 ;---------------------------------------------------------
 ; Global entry point. See `ops_common.asm` for info.
 
 %macro process_fn 1 ; number of planes
-cglobal sws_process%1_x86, 6, 6 + 2 * %1, 16
+cglobal sws_process%1_x86, 6, 7 + 2 * %1, 16
             ; Args:
             ;   execq, implq, bxd, yd as defined in ops_common.int
             ;   bx_end and y_end are initially in tmp0d / tmp1d
@@ -78,6 +81,8 @@ cglobal sws_process%1_x86, 6, 6 + 2 * %1, 16
             add implq, SwsOpImpl.next
             mov [rsp +  0], tmp0q
             mov [rsp +  8], implq
+            movsxdifnidn bxq, bxd
+            movsxdifnidn yq, yd
 
             ; load plane pointers
             mov in0q,  [execq + SwsOpExec.in0]
@@ -123,6 +128,28 @@ IF %1 > 1,  add out1q, [execq + SwsOpExec.out_bump1]
 IF %1 > 2,  add out2q, [execq + SwsOpExec.out_bump2]
 IF %1 > 3,  add out3q, [execq + SwsOpExec.out_bump3]
             mov bxd, [rsp + 16]
+            ; conditionally apply y bump (if non-NULL)
+            mov tmp0q, [execq + SwsOpExec.in_bump_y]
+            test tmp0q, tmp0q
+            jz .continue
+            movsxd tmp0q, [tmp0q + yq * 4 - 4] ; load (signed) y bump
+%if %1 > 3
+            mov tmp1q, tmp0q
+            imul tmp1q, [execq + SwsOpExec.in_stride3]
+            add in3q, tmp1q
+%endif
+%if %1 > 2
+            mov tmp1q, tmp0q
+            imul tmp1q, [execq + SwsOpExec.in_stride2]
+            add in2q, tmp1q
+%endif
+%if %1 > 1
+            mov tmp1q, tmp0q
+            imul tmp1q, [execq + SwsOpExec.in_stride1]
+            add in1q, tmp1q
+%endif
+            imul tmp0q, [execq + SwsOpExec.in_stride0]
+            add in0q, tmp0q
 .continue:
             jmp [rsp]
 .end:
@@ -203,9 +230,11 @@ packed_shuffle 16,  8 ; 16 -> 8
 packed_shuffle 10, 15 ; 16 -> 24
 packed_shuffle  8, 16 ; 16 -> 32, 32 -> 64
 packed_shuffle  4, 12 ; 16 -> 48
+packed_shuffle 15,  5 ; 24 -> 8
 packed_shuffle 15, 15 ; 24 -> 24
 packed_shuffle 12, 16 ; 24 -> 32
 packed_shuffle  6, 12 ; 24 -> 48
+packed_shuffle 16,  4 ; 32 -> 8,  64 -> 16
 packed_shuffle 16, 12 ; 32 -> 24, 64 -> 48
 packed_shuffle 16, 16 ; 32 -> 32, 64 -> 64
 packed_shuffle  8, 12 ; 32 -> 48
@@ -456,7 +485,7 @@ IF V2,  movd mx2, [in0q + 2]
 %endif
         mova m8, [bits_shuf]
         VBROADCASTI128 m9,  [bits_mask]
-        VBROADCASTI128 m10, [mask1]
+        VBROADCASTI128 m10, [const1b]
         LOAD_CONT tmp0q
         add in0q, (mmsize >> 3) * (1 + V2)
         pshufb mx,  m8
@@ -622,6 +651,7 @@ op clear
         decl_pattern 1, 1, 1, 0, clear_generic
         decl_pattern 0, 1, 1, 1, clear_generic
         decl_pattern 0, 0, 1, 1, clear_generic
+        decl_pattern 1, 0, 1, 1, clear_generic
         decl_pattern 1, 0, 0, 1, clear_generic
         decl_pattern 1, 1, 0, 0, clear_generic
         decl_pattern 0, 1, 0, 1, clear_generic
@@ -946,7 +976,7 @@ IF W,   vpermq mw, mw, q3120
 %endmacro
 
 ;---------------------------------------------------------
-; Shifting
+; Shifting and scaling
 
 %macro lshift16 0
 op lshift16
@@ -982,6 +1012,16 @@ IF W,   psrlw mw2, xm8
         CONTINUE tmp0q
 %endmacro
 
+; special cases for expanding bits to full range
+%macro expand_bits 2 ; bits, suffix
+op expand_bits%1
+        mova m8, [const1%2]
+        LOAD_CONT tmp0q
+        pcmpeq%2 mx, m8
+IF V2,  pcmpeq%2 mx2, m8
+        CONTINUE tmp0q
+%endmacro
+
 ;---------------------------------------------------------
 ; Macro instantiations for kernel functions
 
@@ -999,6 +1039,7 @@ IF W,   psrlw mw2, xm8
     read_nibbles
     read_bits
     write_bits
+    expand_bits 8, b
 
     pack_generic 1, 2, 1
     pack_generic 3, 3, 2
@@ -1021,6 +1062,7 @@ IF W,   psrlw mw2, xm8
 
 %macro funcs_u16 0
     rw_packed 16
+    expand_bits 16, w
     pack_generic  4, 4, 4
     pack_generic  5, 5, 5
     pack_generic  5, 6, 5

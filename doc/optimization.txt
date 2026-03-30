@@ -5,7 +5,7 @@ What to optimize:
 -----------------
 If you plan to do non-x86 architecture specific optimizations (SIMD normally),
 then take a look in the x86/ directory, as most important functions are
-already optimized for MMX.
+already optimized for x86.
 
 If you want to do x86 optimizations then you can either try to fine-tune the
 stuff in the x86 directory or find some other functions in the C source to
@@ -20,7 +20,7 @@ architecture-specific versions. It is recommended to look at older
 revisions of the interesting files (web frontends for the various FFmpeg
 branches are listed at http://ffmpeg.org/download.html).
 Alternatively, look into the other architecture-specific versions in
-the x86/, ppc/, alpha/ subdirectories. Even if you don't exactly
+the x86/, ppc/, aarch64/ subdirectories. Even if you don't exactly
 comprehend the instructions, it could help understanding the functions
 and how they can be optimized.
 
