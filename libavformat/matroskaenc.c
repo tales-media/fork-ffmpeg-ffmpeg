@@ -1785,6 +1785,26 @@ static void mkv_write_blockadditionmapping(AVFormatContext *s, const MatroskaMux
 
         end_ebml_master(pb, mapping);
     }
+
+    sd = av_packet_side_data_get(par->coded_side_data, par->nb_coded_side_data,
+                                 AV_PKT_DATA_HEVC_CONF);
+    if (sd) {
+        ebml_master mapping;
+        uint64_t expected_size = (2 + 1 + (sizeof(HVCE_BLOCK_TYPE_NAME) - 1))
+                                + (2 + 1 + 4)
+                                + (2 + ebml_length_size(sd->size) + sd->size);
+
+        mapping = start_ebml_master(pb, MATROSKA_ID_TRACKBLKADDMAPPING, expected_size);
+
+        put_ebml_string(pb, MATROSKA_ID_BLKADDIDNAME, HVCE_BLOCK_TYPE_NAME);
+        put_ebml_uint(pb, MATROSKA_ID_BLKADDIDTYPE, MATROSKA_BLOCK_ADD_ID_TYPE_HVCE);
+        put_ebml_binary(pb, MATROSKA_ID_BLKADDIDEXTRADATA, sd->data, sd->size);
+
+        end_ebml_master(pb, mapping);
+
+        // DV Profile 7 EL uses BlockAddID 1; ensure MaxBlockAdditionID reflects this.
+        track->max_blockaddid = FFMAX(track->max_blockaddid, 1);
+    }
 #endif
 }
 
@@ -2097,6 +2117,8 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
         put_ebml_uint(pb, MATROSKA_ID_TRACKTYPE, MATROSKA_TRACK_TYPE_AUDIO);
 
         audio_frame_samples = av_get_audio_frame_duration2(par, 0);
+        if (!audio_frame_samples)
+            audio_frame_samples = par->frame_size;
         if (audio_frame_samples)
             mkv_write_default_duration(track, pb, (AVRational){ audio_frame_samples,
                                                                 par->sample_rate });
@@ -2145,8 +2167,7 @@ static int mkv_write_track(AVFormatContext *s, MatroskaMuxContext *mkv,
         return AVERROR(EINVAL);
     }
 
-    if (!IS_WEBM(mkv))
-        mkv_write_blockadditionmapping(s, mkv, par, pb, track, st);
+    mkv_write_blockadditionmapping(s, mkv, par, pb, track, st);
 
     if (!IS_WEBM(mkv) || par->codec_id != AV_CODEC_ID_WEBVTT) {
         uint8_t *codecpriv;
@@ -2961,7 +2982,7 @@ static int mkv_write_block(void *logctx, MatroskaMuxContext *mkv,
             if (ret < 0)
                 return ret;
 
-            mkv_write_blockadditional(&writer, t35_buf, payload_size + 5,
+            mkv_write_blockadditional(&writer, smpte_2094_app5_buf, payload_size + 5,
                                       MATROSKA_BLOCK_ADD_ID_ITU_T_T35);
             track->max_blockaddid = FFMAX(track->max_blockaddid,
                                           MATROSKA_BLOCK_ADD_ID_ITU_T_T35);
@@ -3372,30 +3393,28 @@ after_cues:
 
     if (mkv->track.bc) {
         // write Tracks master
-        if (!IS_WEBM(mkv)) {
-            AVIOContext *track_bc = mkv->track.bc;
+        AVIOContext *track_bc = mkv->track.bc;
 
-            for (unsigned i = 0; i < s->nb_streams; i++) {
-                const mkv_track *track = &mkv->tracks[i];
+        for (unsigned i = 0; i < s->nb_streams; i++) {
+            const mkv_track *track = &mkv->tracks[i];
 
-                if (!track->max_blockaddid)
-                    continue;
+            if (!track->max_blockaddid)
+                continue;
 
-                // We reserved a single byte to write this value.
-                av_assert0(track->max_blockaddid <= 0xFF);
+            // We reserved a single byte to write this value.
+            av_assert0(track->max_blockaddid <= 0xFF);
 
-                avio_seek(track_bc, track->blockadditionmapping_offset, SEEK_SET);
+            avio_seek(track_bc, track->blockadditionmapping_offset, SEEK_SET);
 
-                put_ebml_uint(track_bc, MATROSKA_ID_TRACKMAXBLKADDID,
-                              track->max_blockaddid);
-                if (track->max_blockaddid == MATROSKA_BLOCK_ADD_ID_ITU_T_T35) {
-                    ebml_master mapping_master = start_ebml_master(track_bc, MATROSKA_ID_TRACKBLKADDMAPPING, 8);
-                    put_ebml_uint(track_bc, MATROSKA_ID_BLKADDIDTYPE,
-                                  MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35);
-                    put_ebml_uint(track_bc, MATROSKA_ID_BLKADDIDVALUE,
-                                  MATROSKA_BLOCK_ADD_ID_ITU_T_T35);
-                    end_ebml_master(track_bc, mapping_master);
-                }
+            put_ebml_uint(track_bc, MATROSKA_ID_TRACKMAXBLKADDID,
+                          track->max_blockaddid);
+            if (track->max_blockaddid == MATROSKA_BLOCK_ADD_ID_ITU_T_T35) {
+                ebml_master mapping_master = start_ebml_master(track_bc, MATROSKA_ID_TRACKBLKADDMAPPING, 8);
+                put_ebml_uint(track_bc, MATROSKA_ID_BLKADDIDTYPE,
+                              MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35);
+                put_ebml_uint(track_bc, MATROSKA_ID_BLKADDIDVALUE,
+                              MATROSKA_BLOCK_ADD_ID_ITU_T_T35);
+                end_ebml_master(track_bc, mapping_master);
             }
         }
 

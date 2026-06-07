@@ -75,6 +75,7 @@ layout (push_constant, scalar) uniform pushConstants {
     ivec2 sar;
     int pic_mode;
     uint slice_size_max;
+    uint max_pixels_per_slice;
 };
 
 #include "rangecoder.glsl"
@@ -100,7 +101,7 @@ struct SliceContext {
     uint slice_coding_mode;
     bool slice_reset_contexts;
 
-    u16vec4 remap_count;
+    i32vec4 remap_count;
 
     /* Decoder-only */
     uint remap;
@@ -121,6 +122,8 @@ layout (set = 1, binding = 0, scalar) SB_QUALI buffer slice_ctx_buf {
 uint slice_coord(uint width, uint sx, uint num_h_slices, uint chroma_shift)
 {
     uint mpw = 1 << chroma_shift;
+    if (colorspace == 2)
+        mpw = max(mpw, 2u);
     uint awidth = align(width, mpw);
 
     if ((version < 4) || ((version == 4) && (micro_version < 3)))
@@ -142,20 +145,22 @@ u16vec4 get_slice_bits(in SliceContext sc)
 #ifndef FLOAT
     return u16vec4(c_bits, c_bits, c_bits, c_bits);
 #else
-    u16vec4 bits = sc.remap_count;
+    u32vec4 cnt = sc.remap_count;
 #if defined(ENCODE)
     if (remap_mode == 0)
 #elif defined(DECODE)
     if (sc.remap == 0)
 #endif
-        bits = u16vec4(ivec4(rct_offset, rct_offset, rct_offset, rct_offset));
+        cnt = u32vec4(uint(rct_offset), uint(rct_offset),
+                      uint(rct_offset), uint(rct_offset));
 
+    u16vec4 bits = u16vec4(cnt);
     if (sc.slice_coding_mode == 0) {
-        uint16_t max3 = max(bits[0], max(bits[1], bits[2]));
+        uint max3 = max(cnt[0], max(cnt[1], cnt[2]));
         bits = u16vec4(ceil_log2(max3),
-                       ceil_log2(bits[0] + bits[1]),
-                       ceil_log2(bits[0] + bits[2]),
-                       bits[3]);
+                       ceil_log2(cnt[0] + cnt[1]),
+                       ceil_log2(cnt[0] + cnt[2]),
+                       ceil_log2(cnt[3]));
     }
 
     return bits;

@@ -19,8 +19,9 @@
  */
 
 #include "libavutil/avassert.h"
+#include "libavutil/mem.h"
 
-#include "ops_backend.h"
+#include "ops_internal.h"
 
 typedef struct MemcpyPriv {
     int num_planes;
@@ -142,6 +143,7 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
 
 const SwsOpBackend backend_murder = {
     .name       = "memcpy",
+    .flags      = SWS_BACKEND_MEMCPY,
     .compile    = compile,
     .hw_format  = AV_PIX_FMT_NONE,
 };

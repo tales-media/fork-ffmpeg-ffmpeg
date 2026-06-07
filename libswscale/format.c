@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/attributes.h"
 #include "libavutil/avassert.h"
 #include "libavutil/hdr_dynamic_metadata.h"
 #include "libavutil/mastering_display_metadata.h"
@@ -553,9 +554,25 @@ bool ff_infer_colors(SwsColor *src, SwsColor *dst)
     return incomplete;
 }
 
-int sws_test_format(enum AVPixelFormat format, int output)
+/* Variant of sws_test_format() for the ops-based code */
+static int test_format_ops(enum AVPixelFormat format, int output);
+static int test_format_legacy(enum AVPixelFormat format, int output)
 {
     return output ? sws_isSupportedOutput(format) : sws_isSupportedInput(format);
+}
+
+int ff_sws_test_pixfmt_backend(const SwsBackend backends,
+                               enum AVPixelFormat format, int output)
+{
+    /* The only non-ops backend is the legacy backend */
+    const SwsBackend backends_ops = SWS_BACKEND_ALL ^ SWS_BACKEND_LEGACY;
+    return ((backends & SWS_BACKEND_LEGACY) && test_format_legacy(format, output)) ||
+           ((backends & backends_ops)       && test_format_ops(format, output));
+}
+
+int sws_test_format(enum AVPixelFormat format, int output)
+{
+    return ff_sws_test_pixfmt_backend(SWS_BACKEND_STABLE, format, output);
 }
 
 int sws_test_hw_format(enum AVPixelFormat format)
@@ -610,10 +627,10 @@ static int test_loc(enum AVChromaLocation loc)
     return (unsigned)loc < AVCHROMA_LOC_NB;
 }
 
-int ff_test_fmt(const SwsFormat *fmt, int output)
+int ff_test_fmt(const SwsBackend backends, const SwsFormat *fmt, int output)
 {
     return fmt->width > 0 && fmt->height > 0            &&
-           sws_test_format    (fmt->format,     output) &&
+           ff_sws_test_pixfmt_backend(backends, fmt->format, output) &&
            sws_test_colorspace(fmt->csp,        output) &&
            sws_test_primaries (fmt->color.prim, output) &&
            sws_test_transfer  (fmt->color.trc,  output) &&
@@ -626,7 +643,7 @@ int sws_test_frame(const AVFrame *frame, int output)
 {
     for (int field = 0; field < 2; field++) {
         const SwsFormat fmt = ff_fmt_from_frame(frame, field);
-        if (!ff_test_fmt(&fmt, output))
+        if (!ff_test_fmt(SWS_BACKEND_STABLE, &fmt, output))
             return 0;
         if (!fmt.interlaced)
             break;
@@ -904,6 +921,18 @@ static int fmt_analyze(enum AVPixelFormat fmt, SwsReadWriteOp *rw_op,
     }
 
     return 0;
+}
+
+static int test_format_ops(enum AVPixelFormat format, int output)
+{
+    SwsReadWriteOp rw;
+    SwsSwizzleOp swizzle;
+    SwsPackOp pack;
+    SwsShiftOp shift;
+    SwsPixelType pixel_type, raw_type;
+    int ret = fmt_analyze(format, &rw, &pack, &swizzle, &shift,
+                          &pixel_type, &raw_type);
+    return ret == 0;
 }
 
 static SwsSwizzleOp swizzle_inv(SwsSwizzleOp swiz) {
@@ -1387,7 +1416,7 @@ int ff_sws_decode_colors(SwsContext *ctx, SwsPixelType type,
     case AVCOL_SPC_UNSPECIFIED:
         c = av_csp_luma_coeffs_from_avcsp(AVCOL_SPC_BT470BG);
         *incomplete = true;
-        /* fall through */
+        av_fallthrough;
     case AVCOL_SPC_FCC:
     case AVCOL_SPC_BT470BG:
     case AVCOL_SPC_SMPTE170M:
@@ -1459,7 +1488,7 @@ int ff_sws_encode_colors(SwsContext *ctx, SwsPixelType type,
     case AVCOL_SPC_UNSPECIFIED:
         c = av_csp_luma_coeffs_from_avcsp(AVCOL_SPC_BT470BG);
         *incomplete = true;
-        /* fall through */
+        av_fallthrough;
     case AVCOL_SPC_FCC:
     case AVCOL_SPC_BT470BG:
     case AVCOL_SPC_SMPTE170M:
@@ -1550,4 +1579,130 @@ int ff_sws_encode_colors(SwsContext *ctx, SwsPixelType type,
     });
 }
 
-#endif /* CONFIG_UNSTABLE */
+static SwsScaler get_scaler_fallback(SwsContext *ctx)
+{
+    if (ctx->scaler != SWS_SCALE_AUTO)
+        return ctx->scaler;
+
+    /* Backwards compatibility with legacy flags API */
+    if (ctx->flags & SWS_BILINEAR) {
+        return SWS_SCALE_BILINEAR;
+    } else if (ctx->flags & (SWS_BICUBIC | SWS_BICUBLIN)) {
+        return SWS_SCALE_BICUBIC;
+    } else if (ctx->flags & SWS_POINT) {
+        return SWS_SCALE_POINT;
+    } else if (ctx->flags & SWS_AREA) {
+        return SWS_SCALE_AREA;
+    } else if (ctx->flags & SWS_GAUSS) {
+        return SWS_SCALE_GAUSSIAN;
+    } else if (ctx->flags & SWS_SINC) {
+        return SWS_SCALE_SINC;
+    } else if (ctx->flags & SWS_LANCZOS) {
+        return SWS_SCALE_LANCZOS;
+    } else if (ctx->flags & SWS_SPLINE) {
+        return SWS_SCALE_SPLINE;
+    } else {
+        return SWS_SCALE_AUTO;
+    }
+}
+
+static int add_filter(SwsContext *ctx, SwsPixelType type, SwsOpList *ops,
+                      SwsOpType filter, int src_size, int dst_size)
+{
+    if (src_size == dst_size)
+        return 0; /* no-op */
+
+    SwsFilterParams params = {
+        .scaler   = get_scaler_fallback(ctx),
+        .src_size = src_size,
+        .dst_size = dst_size,
+    };
+
+    for (int i = 0; i < SWS_NUM_SCALER_PARAMS; i++)
+        params.scaler_params[i] = ctx->scaler_params[i];
+
+    SwsFilterWeights *kernel;
+    int ret = ff_sws_filter_generate(ctx, &params, &kernel);
+    if (ret == AVERROR(ENOTSUP)) {
+        /* Filter size exceeds limit; cascade with geometric mean size */
+        int mean = sqrt((int64_t) src_size * dst_size);
+        if (mean == src_size || mean == dst_size)
+            return AVERROR_BUG; /* sanity, prevent infinite loop */
+        ret = add_filter(ctx, type, ops, filter, src_size, mean);
+        if (ret < 0)
+            return ret;
+        return add_filter(ctx, type, ops, filter, mean, dst_size);
+    } else if (ret < 0) {
+        return ret;
+    }
+
+    return ff_sws_op_list_append(ops, &(SwsOp) {
+        .type = type,
+        .op   = filter,
+        .filter.kernel = kernel,
+    });
+}
+
+int ff_sws_add_filters(SwsContext *ctx, SwsPixelType type, SwsOpList *ops,
+                       const SwsFormat *src, const SwsFormat *dst)
+{
+    /**
+     * Always perform horizontal scaling first, since it's much more likely to
+     * benefit from small integer optimizations; we should maybe flip the order
+     * here if we're downscaling the vertical resolution by a lot, though.
+     */
+    int ret = add_filter(ctx, type, ops, SWS_OP_FILTER_H, src->width, dst->width);
+    if (ret < 0)
+        return ret;
+
+    return add_filter(ctx, type, ops, SWS_OP_FILTER_V, src->height, dst->height);
+}
+
+int ff_sws_op_list_generate(SwsContext *ctx, const SwsFormat *src,
+                            const SwsFormat *dst, SwsOpList **out_ops,
+                            bool *incomplete)
+{
+    /* The new code does not yet support alpha blending */
+    if (src->desc->flags & AV_PIX_FMT_FLAG_ALPHA &&
+        ctx->alpha_blend != SWS_ALPHA_BLEND_NONE)
+        return AVERROR(ENOTSUP);
+
+    SwsOpList *ops = ff_sws_op_list_alloc();
+    if (!ops)
+        return AVERROR(ENOMEM);
+    ops->src = *src;
+    ops->dst = *dst;
+
+    const SwsPixelType type = SWS_PIXEL_F32;
+    int ret = ff_sws_decode_pixfmt(ops, src->format);
+    if (ret < 0)
+        goto fail;
+    ret = ff_sws_decode_colors(ctx, type, ops, src, incomplete);
+    if (ret < 0)
+        goto fail;
+    ret = ff_sws_add_filters(ctx, type, ops, src, dst);
+    if (ret < 0)
+        goto fail;
+    ret = ff_sws_encode_colors(ctx, type, ops, src, dst, incomplete);
+    if (ret < 0)
+        goto fail;
+    ret = ff_sws_encode_pixfmt(ops, dst->format);
+    if (ret < 0)
+        goto fail;
+
+    *out_ops = ops;
+    return 0;
+
+fail:
+    ff_sws_op_list_free(&ops);
+    return ret;
+}
+
+#else /* !CONFIG_UNSTABLE */
+
+static int test_format_ops(enum AVPixelFormat format, int output)
+{
+    return 0;
+}
+
+#endif

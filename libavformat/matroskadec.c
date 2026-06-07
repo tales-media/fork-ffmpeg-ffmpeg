@@ -34,6 +34,7 @@
 #include <inttypes.h>
 #include <stdio.h>
 
+#include "libavutil/attributes.h"
 #include "libavutil/avstring.h"
 #include "libavutil/base64.h"
 #include "libavutil/bprint.h"
@@ -1338,6 +1339,13 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
 
             if ((unsigned)list->nb_elem + 1 >= UINT_MAX / syntax->list_elem_size)
                 return AVERROR(ENOMEM);
+            if (syntax->id == MATROSKA_ID_TRACKENTRY &&
+                list->nb_elem >= matroska->ctx->max_streams) {
+                av_log(matroska->ctx, AV_LOG_ERROR,
+                       "Number of tracks exceeds max_streams (%d)\n",
+                       matroska->ctx->max_streams);
+                return AVERROR(EINVAL);
+            }
             newelem = av_fast_realloc(list->elem,
                                       &list->alloc_elem_size,
                                       (list->nb_elem + 1) * syntax->list_elem_size);
@@ -1602,6 +1610,7 @@ static void ebml_free(EbmlSyntax *syntax, void *data)
                 list->alloc_elem_size = 0;
             } else
                 ebml_free(syntax[i].def.n, data_off);
+            break;
         default:
             break;
         }
@@ -2501,6 +2510,26 @@ static int mkv_parse_dvcc_dvvc(AVFormatContext *s, AVStream *st, const MatroskaT
     return ff_isom_parse_dvcc_dvvc(s, st, bin->data, bin->size);
 }
 
+static int mkv_parse_hvce(AVFormatContext *s, AVStream *st, EbmlBin *bin)
+{
+    AVPacketSideData *sd;
+
+    if (bin->size < 23) {
+        av_log(s, AV_LOG_ERROR, "Invalid hvcE size %d\n", bin->size);
+        return AVERROR_INVALIDDATA;
+    }
+
+    sd = av_packet_side_data_new(&st->codecpar->coded_side_data,
+                                 &st->codecpar->nb_coded_side_data,
+                                 AV_PKT_DATA_HEVC_CONF,
+                                 bin->size, 0);
+    if (!sd)
+        return AVERROR(ENOMEM);
+
+    memcpy(sd->data, bin->data, bin->size);
+    return 0;
+}
+
 static int mkv_parse_block_addition_mappings(AVFormatContext *s, AVStream *st, MatroskaTrack *track)
 {
     const EbmlList *mappings_list = &track->block_addition_mappings;
@@ -2517,7 +2546,7 @@ static int mkv_parse_block_addition_mappings(AVFormatContext *s, AVStream *st, M
                    "Explicit block Addition Mapping type \"Use BlockAddIDValue\", value %"PRIu64","
                    " name \"%s\" found.\n", mapping->value, mapping->name ? mapping->name : "");
             type = MATROSKA_BLOCK_ADD_ID_TYPE_OPAQUE;
-            // fall-through
+            av_fallthrough;
         case MATROSKA_BLOCK_ADD_ID_TYPE_OPAQUE:
         case MATROSKA_BLOCK_ADD_ID_TYPE_ITU_T_T35:
             if (mapping->value != type) {
@@ -2533,6 +2562,11 @@ static int mkv_parse_block_addition_mappings(AVFormatContext *s, AVStream *st, M
         case MATROSKA_BLOCK_ADD_ID_TYPE_DVCC:
         case MATROSKA_BLOCK_ADD_ID_TYPE_DVVC:
             if ((ret = mkv_parse_dvcc_dvvc(s, st, track, &mapping->extradata)) < 0)
+                return ret;
+
+            break;
+        case MATROSKA_BLOCK_ADD_ID_TYPE_HVCE:
+            if ((ret = mkv_parse_hvce(s, st, &mapping->extradata)) < 0)
                 return ret;
 
             break;
@@ -2783,6 +2817,10 @@ static int mka_parse_audio_codec(MatroskaTrack *track, AVCodecParameters *par,
             par->block_align  = track->audio.sub_packet_size;
             *extradata_offset = 78;
         }
+        if (par->block_align <= 0 ||
+            track->audio.sub_packet_h * (unsigned)track->audio.frame_size > INT_MAX ||
+            track->audio.frame_size * track->audio.sub_packet_h < par->block_align)
+            return AVERROR_INVALIDDATA;
         track->audio.buf = av_malloc_array(track->audio.sub_packet_h,
                                             track->audio.frame_size);
         if (!track->audio.buf)
@@ -3310,6 +3348,75 @@ static int matroska_parse_tracks(AVFormatContext *s)
     return 0;
 }
 
+static int matroska_parse_dovi_streams(AVFormatContext *s)
+{
+    AVStream *bl_st = NULL, *el_st = NULL;
+    AVStreamGroup *stg;
+    int err;
+
+    /* Matroska has no explicit cross-track Dolby Vision reference, so the
+     * pairing is recovered from the dvcC/dvvC config records. Find a single
+     * HEVC track whose record declares a profile 7 enhancement layer
+     * (el_present_flag=1) and a single sibling HEVC BL candidate. If either
+     * side is ambiguous, leave the streams ungrouped. */
+    if (s->nb_streams <= 1)
+        return 0;
+
+    for (int i = 0; i < s->nb_streams; i++) {
+        AVStream *st = s->streams[i];
+        const AVPacketSideData *sd;
+        const AVDOVIDecoderConfigurationRecord *dovi;
+
+        if (st->codecpar->codec_id != AV_CODEC_ID_HEVC)
+            continue;
+
+        sd = av_packet_side_data_get(st->codecpar->coded_side_data,
+                                     st->codecpar->nb_coded_side_data,
+                                     AV_PKT_DATA_DOVI_CONF);
+        if (sd) {
+            dovi = (const AVDOVIDecoderConfigurationRecord *)sd->data;
+            if (dovi->dv_profile == 7 && dovi->el_present_flag) {
+                /* bl_present_flag is not checked, because the files in the
+                 * wild set it to 1 for EL stream, while the expectation, based
+                 * on Dolby spec for MPEG-TS would be that it's set to 0.
+                 * Ignore this, if we have EL track and single other video track
+                 * it's safe to assume it's BL. */
+                if (el_st)
+                    return 0;
+                el_st = st;
+                continue;
+            }
+        }
+
+        if (bl_st)
+            return 0;
+        bl_st = st;
+    }
+
+    if (!el_st || !bl_st)
+        return 0;
+
+    stg = avformat_stream_group_create(s, AV_STREAM_GROUP_PARAMS_DOLBY_VISION, NULL);
+    if (!stg)
+        return AVERROR(ENOMEM);
+
+    stg->id = el_st->id;
+
+    err = avformat_stream_group_add_stream(stg, bl_st);
+    if (err < 0)
+        return err;
+
+    err = avformat_stream_group_add_stream(stg, el_st);
+    if (err < 0)
+        return err;
+
+    stg->params.layered_video->el_index = stg->nb_streams - 1;
+    stg->params.layered_video->width = bl_st->codecpar->width;
+    stg->params.layered_video->height = bl_st->codecpar->height;
+
+    return 0;
+}
+
 static int matroska_read_header(AVFormatContext *s)
 {
     FFFormatContext *const si = ffformatcontext(s);
@@ -3458,6 +3565,10 @@ static int matroska_read_header(AVFormatContext *s)
     matroska_add_index_entries(matroska);
 
     matroska_convert_tags(s);
+
+    res = matroska_parse_dovi_streams(s);
+    if (res < 0)
+        return res;
 
     return 0;
 }
@@ -3973,7 +4084,7 @@ static int matroska_parse_block_additional(MatroskaDemuxContext *matroska,
                     break; // ignore
 
                 hdr_smpte_2094_app5 = av_dynamic_hdr_smpte2094_app5_alloc(&hdr_smpte_2094_app5_size);
-                if (!hdr_smpte_2094_app5_size)
+                if (!hdr_smpte_2094_app5)
                     return AVERROR(ENOMEM);
 
                 if ((res = av_dynamic_hdr_smpte2094_app5_from_t35(hdr_smpte_2094_app5,
@@ -4514,7 +4625,8 @@ static CueDesc get_cue_desc(AVFormatContext *s, int64_t ts, int64_t cues_start) 
         cue_desc.end_offset = cues_start - matroska->segment_start;
     }
 
-    if (cue_desc.end_time_ns < cue_desc.start_time_ns)
+    if (cue_desc.end_time_ns < cue_desc.start_time_ns ||
+        cue_desc.end_time_ns - (uint64_t)cue_desc.start_time_ns > INT64_MAX)
         return (CueDesc) {-1, -1, -1, -1};
 
     return cue_desc;
@@ -4708,11 +4820,14 @@ static int64_t webm_dash_manifest_compute_bandwidth(AVFormatContext *s, int64_t 
             bits_per_second = 0.0;
             do {
                 int64_t desc_bytes = desc_end.end_offset - desc_beg.start_offset;
-                int64_t desc_ns = desc_end.end_time_ns - desc_beg.start_time_ns;
                 double desc_sec, calc_bits_per_second, percent, mod_bits_per_second;
                 if (desc_bytes <= 0 || desc_bytes > INT64_MAX/8)
                     return -1;
+                if (desc_end.end_time_ns <= desc_beg.start_time_ns ||
+                    desc_end.end_time_ns - (uint64_t)desc_beg.start_time_ns > INT64_MAX)
+                    return -1;
 
+                int64_t desc_ns = desc_end.end_time_ns - desc_beg.start_time_ns;
                 desc_sec = desc_ns / nano_seconds_per_second;
                 calc_bits_per_second = (desc_bytes * 8) / desc_sec;
 

@@ -49,6 +49,7 @@
 #include "codec_internal.h"
 #include "decode.h"
 #include "exif.h"
+#include "exif_internal.h"
 #include "hwaccel_internal.h"
 #include "hwconfig.h"
 #include "internal.h"
@@ -1549,6 +1550,9 @@ int ff_decode_frame_props_from_pkt(const AVCodecContext *avctx,
         { AV_PKT_DATA_S12M_TIMECODE,               AV_FRAME_DATA_S12M_TIMECODE },
         { AV_PKT_DATA_SKIP_SAMPLES,                AV_FRAME_DATA_SKIP_SAMPLES },
         { AV_PKT_DATA_LCEVC,                       AV_FRAME_DATA_LCEVC },
+        { AV_PKT_DATA_IAMF_MIX_GAIN_PARAM,         AV_FRAME_DATA_IAMF_MIX_GAIN_PARAM },
+        { AV_PKT_DATA_IAMF_DEMIXING_INFO_PARAM,    AV_FRAME_DATA_IAMF_DEMIXING_INFO_PARAM },
+        { AV_PKT_DATA_IAMF_RECON_GAIN_INFO_PARAM,  AV_FRAME_DATA_IAMF_RECON_GAIN_INFO_PARAM },
         { AV_PKT_DATA_NB }
     };
 

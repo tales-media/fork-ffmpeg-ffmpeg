@@ -27,6 +27,7 @@
 #include "libavfilter/buffersink.h"
 #include "libavfilter/buffersrc.h"
 
+#include "libavutil/attributes.h"
 #include "libavutil/avassert.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
@@ -50,8 +51,6 @@ typedef struct FilterGraphPriv {
     // true when the filtergraph contains only meta filters
     // that do not modify the frame data
     int              is_meta;
-    // source filters are present in the graph
-    int              have_sources;
     int              disable_conversions;
 
     unsigned         nb_outputs_done;
@@ -1040,6 +1039,7 @@ void fg_free(FilterGraph **pfg)
         av_frame_free(&ifp->opts.fallback);
 
         av_buffer_unref(&ifp->hw_frames_ctx);
+        av_channel_layout_uninit(&ifp->ch_layout);
         av_freep(&ifilter->linklabel);
         av_freep(&ifp->opts.name);
         av_frame_side_data_free(&ifp->side_data, &ifp->nb_side_data);
@@ -1144,16 +1144,6 @@ int fg_create(FilterGraph **pfg, char **graph_desc, Scheduler *sch,
                       hw_device_for_filter());
     if (ret < 0)
         goto fail;
-
-    for (unsigned i = 0; i < graph->nb_filters; i++) {
-        const AVFilter *f = graph->filters[i]->filter;
-        if ((!avfilter_filter_pad_count(f, 0) &&
-             !(f->flags & AVFILTER_FLAG_DYNAMIC_INPUTS)) ||
-            !strcmp(f->name, "apad")) {
-            fgp->have_sources = 1;
-            break;
-        }
-    }
 
     for (AVFilterInOut *cur = inputs; cur; cur = cur->next) {
         InputFilter *const ifilter = ifilter_alloc(fg);
@@ -1811,10 +1801,8 @@ static int configure_output_audio_filter(FilterGraphPriv *fgp, AVFilterGraph *gr
         pad_idx = 0;
     }
 
-    if (ofilter->apad) {
+    if (ofilter->apad)
         AUTO_INSERT_FILTER("-apad", "apad", ofilter->apad);
-        fgp->have_sources = 1;
-    }
 
     snprintf(name, sizeof(name), "trim for output %s", ofilter->output_name);
     ret = insert_trim(fgp, ofp->trim_start_us, ofp->trim_duration_us,
@@ -2579,6 +2567,7 @@ static void video_sync_process(OutputFilterPriv *ofp, AVFrame *frame,
             delta0 = 0;
             ofp->next_pts = llrint(sync_ipts);
         }
+        av_fallthrough;
     case VSYNC_CFR:
         // FIXME set to 0.5 after we fix some dts/pts bugs like in avidec.c
         if (frame_drop_threshold && delta < frame_drop_threshold && fps->frame_number) {
@@ -2846,8 +2835,10 @@ static int fg_output_step(OutputFilterPriv *ofp, FilterGraphThread *fgt,
     if (!fgt->got_frame) {
         ret = clone_side_data(&fd->side_data, &fd->nb_side_data,
                               ofp->side_data, ofp->nb_side_data, 0);
-        if (ret < 0)
+        if (ret < 0) {
+            av_frame_unref(frame);
             return ret;
+        }
     }
 
     fd->wallclock[LATENCY_PROBE_FILTER_POST] = av_gettime_relative();
@@ -2881,7 +2872,6 @@ static int read_frames(FilterGraph *fg, FilterGraphThread *fgt,
                        AVFrame *frame)
 {
     FilterGraphPriv *fgp = fgp_from_fg(fg);
-    int did_step = 0;
 
     // graph not configured, just select the input to request
     if (!fgt->graph) {
@@ -2900,7 +2890,7 @@ static int read_frames(FilterGraph *fg, FilterGraphThread *fgt,
         return AVERROR_BUG;
     }
 
-    while (fgp->nb_outputs_done < fg->nb_outputs) {
+    if (fgp->nb_outputs_done < fg->nb_outputs) {
         int ret;
 
         /* Reap all buffers present in the buffer sinks */
@@ -2915,9 +2905,6 @@ static int read_frames(FilterGraph *fg, FilterGraphThread *fgt,
             }
         }
 
-        // return after one iteration, so that scheduler can rate-control us
-        if (did_step && fgp->have_sources)
-            return 0;
 
         ret = avfilter_graph_request_oldest(fgt->graph);
         if (ret == AVERROR(EAGAIN)) {
@@ -2934,7 +2921,8 @@ static int read_frames(FilterGraph *fg, FilterGraphThread *fgt,
         }
         fgt->next_in = fg->nb_inputs;
 
-        did_step = 1;
+        // return so that scheduler can rate-control us
+        return 0;
     }
 
     return AVERROR_EOF;

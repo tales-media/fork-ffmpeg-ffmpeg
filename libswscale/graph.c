@@ -21,6 +21,7 @@
 #include "libavutil/avassert.h"
 #include "libavutil/cpu.h"
 #include "libavutil/error.h"
+#include "libavutil/hwcontext.h"
 #include "libavutil/imgutils.h"
 #include "libavutil/macros.h"
 #include "libavutil/mem.h"
@@ -37,6 +38,10 @@
 #include "swscale_internal.h"
 #include "graph.h"
 #include "ops.h"
+#include "ops_dispatch.h"
+#if CONFIG_VULKAN
+#include "vulkan/ops.h"
+#endif
 
 int ff_sws_pass_aligned_width(const SwsPass *pass, int width)
 {
@@ -85,6 +90,31 @@ static int frame_alloc_planes(AVFrame *dst)
     return 0;
 }
 
+#if CONFIG_VULKAN
+static int pass_alloc_output_hw(SwsPass *pass, AVFrame *avframe,
+                                AVBufferRef *dev_ref)
+{
+    SwsPassBuffer *buffer = pass->output;
+    AVBufferRef *frames_ref = av_hwframe_ctx_alloc(dev_ref);
+    if (!frames_ref)
+        return AVERROR(ENOMEM);
+
+    AVHWFramesContext *hwfc = (AVHWFramesContext *)frames_ref->data;
+    hwfc->format    = AV_PIX_FMT_VULKAN;
+    hwfc->sw_format = pass->format;
+    hwfc->width     = buffer->width;
+    hwfc->height    = buffer->height;
+
+    int ret = av_hwframe_ctx_init(frames_ref);
+    if (ret >= 0) {
+        avframe->format = AV_PIX_FMT_VULKAN;
+        ret = av_hwframe_get_buffer(frames_ref, avframe, 0);
+    }
+    av_buffer_unref(&frames_ref);
+    return ret;
+}
+#endif
+
 static int pass_alloc_output(SwsPass *pass)
 {
     if (!pass || pass->output->avframe)
@@ -94,16 +124,35 @@ static int pass_alloc_output(SwsPass *pass)
     AVFrame *avframe = av_frame_alloc();
     if (!avframe)
         return AVERROR(ENOMEM);
-    avframe->format = pass->format;
     avframe->width  = buffer->width;
     avframe->height = buffer->height;
 
-    int ret = frame_alloc_planes(avframe);
+    int ret;
+
+#if CONFIG_VULKAN
+    const SwsGraph *graph = pass->graph;
+    if (graph->src.hw_format == AV_PIX_FMT_VULKAN &&
+        graph->dst.hw_format == AV_PIX_FMT_VULKAN) {
+        AVBufferRef *dev_ref = ff_sws_vk_device_ref(graph->ctx);
+        if (dev_ref) {
+            ret = pass_alloc_output_hw(pass, avframe, dev_ref);
+            if (ret >= 0)
+                goto done;
+            av_frame_unref(avframe);
+        }
+    }
+#endif
+
+    avframe->format = pass->format;
+    ret = frame_alloc_planes(avframe);
     if (ret < 0) {
         av_frame_free(&avframe);
         return ret;
     }
 
+#if CONFIG_VULKAN
+done:
+#endif
     buffer->avframe = avframe;
     ff_sws_frame_from_avframe(&buffer->frame, avframe);
     return 0;
@@ -438,6 +487,7 @@ static int init_legacy_subpass(SwsGraph *graph, SwsContext *sws,
                                 setup_legacy_swscale, sws, free_legacy_swscale, &pass);
     if (ret < 0)
         return ret;
+    pass->backend = SWS_BACKEND_LEGACY;
 
     /**
      * For slice threading, we need to create sub contexts, similar to how
@@ -499,7 +549,15 @@ static int add_legacy_sws_pass(SwsGraph *graph, const SwsFormat *src,
 {
     int ret, warned = 0;
     SwsContext *const ctx = graph->ctx;
+    const SwsBackend backend = ff_sws_enabled_backends(ctx);
+    if (!(backend & SWS_BACKEND_LEGACY))
+        return AVERROR(ENOTSUP);
     if (src->hw_format != AV_PIX_FMT_NONE || dst->hw_format != AV_PIX_FMT_NONE)
+        return AVERROR(ENOTSUP);
+
+    /* Re-check this here because this might not be excluded if the caller was
+     * testing against multiple backends */
+    if (!sws_isSupportedInput(src->format) || !sws_isSupportedOutput(dst->format))
         return AVERROR(ENOTSUP);
 
     SwsContext *sws = sws_alloc_context();
@@ -569,121 +627,25 @@ static int add_legacy_sws_pass(SwsGraph *graph, const SwsFormat *src,
  * Format conversion and scaling *
  *********************************/
 
+static int add_ops_convert_pass(SwsGraph *graph, const SwsFormat *src,
+                                const SwsFormat *dst, SwsPass *input,
+                                SwsPass **output)
+{
 #if CONFIG_UNSTABLE
-static SwsScaler get_scaler_fallback(SwsContext *ctx)
-{
-    if (ctx->scaler != SWS_SCALE_AUTO)
-        return ctx->scaler;
-
-    /* Backwards compatibility with legacy flags API */
-    if (ctx->flags & SWS_BILINEAR) {
-        return SWS_SCALE_BILINEAR;
-    } else if (ctx->flags & (SWS_BICUBIC | SWS_BICUBLIN)) {
-        return SWS_SCALE_BICUBIC;
-    } else if (ctx->flags & SWS_POINT) {
-        return SWS_SCALE_POINT;
-    } else if (ctx->flags & SWS_AREA) {
-        return SWS_SCALE_AREA;
-    } else if (ctx->flags & SWS_GAUSS) {
-        return SWS_SCALE_GAUSSIAN;
-    } else if (ctx->flags & SWS_SINC) {
-        return SWS_SCALE_SINC;
-    } else if (ctx->flags & SWS_LANCZOS) {
-        return SWS_SCALE_LANCZOS;
-    } else if (ctx->flags & SWS_SPLINE) {
-        return SWS_SCALE_SPLINE;
-    } else {
-        return SWS_SCALE_AUTO;
-    }
-}
-
-static int add_filter(SwsContext *ctx, SwsPixelType type, SwsOpList *ops,
-                      SwsOpType filter, int src_size, int dst_size)
-{
-    if (src_size == dst_size)
-        return 0; /* no-op */
-
-    SwsFilterParams params = {
-        .scaler   = get_scaler_fallback(ctx),
-        .src_size = src_size,
-        .dst_size = dst_size,
-    };
-
-    for (int i = 0; i < SWS_NUM_SCALER_PARAMS; i++)
-        params.scaler_params[i] = ctx->scaler_params[i];
-
-    SwsFilterWeights *kernel;
-    int ret = ff_sws_filter_generate(ctx, &params, &kernel);
-    if (ret == AVERROR(ENOTSUP)) {
-        /* Filter size exceeds limit; cascade with geometric mean size */
-        int mean = sqrt((int64_t) src_size * dst_size);
-        if (mean == src_size || mean == dst_size)
-            return AVERROR_BUG; /* sanity, prevent infinite loop */
-        ret = add_filter(ctx, type, ops, filter, src_size, mean);
-        if (ret < 0)
-            return ret;
-        return add_filter(ctx, type, ops, filter, mean, dst_size);
-    } else if (ret < 0) {
-        return ret;
-    }
-
-    return ff_sws_op_list_append(ops, &(SwsOp) {
-        .type = type,
-        .op   = filter,
-        .filter.kernel = kernel,
-    });
-}
-
-static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
-                            const SwsFormat *dst, SwsPass *input,
-                            SwsPass **output)
-{
-    const SwsPixelType type = SWS_PIXEL_F32;
-
     SwsContext *ctx = graph->ctx;
-    SwsOpList *ops = NULL;
-    int ret = AVERROR(ENOTSUP);
 
-    /* Mark the entire new ops infrastructure as experimental for now */
-    if (!(ctx->flags & SWS_UNSTABLE))
-        goto fail;
+    /* Preemptively skip the ops list generation if the backend was
+     * constrained to the legacy implementation only. This would
+     * normally also fail in ff_sws_compile_pass() with the same
+     * error, but this way saves a bit of unnecessary overhead */
+    const SwsBackend backends = ff_sws_enabled_backends(ctx);
+    if (backends == SWS_BACKEND_LEGACY)
+        return AVERROR(ENOTSUP);
 
-    /* The new code does not yet support alpha blending */
-    if (src->desc->flags & AV_PIX_FMT_FLAG_ALPHA &&
-        ctx->alpha_blend != SWS_ALPHA_BLEND_NONE)
-        goto fail;
-
-    ops = ff_sws_op_list_alloc();
-    if (!ops)
-        return AVERROR(ENOMEM);
-    ops->src = *src;
-    ops->dst = *dst;
-
-    ret = ff_sws_decode_pixfmt(ops, src->format);
+    SwsOpList *ops;
+    int ret = ff_sws_op_list_generate(ctx, src, dst, &ops, &graph->incomplete);
     if (ret < 0)
-        goto fail;
-    ret = ff_sws_decode_colors(ctx, type, ops, src, &graph->incomplete);
-    if (ret < 0)
-        goto fail;
-
-    /**
-     * Always perform horizontal scaling first, since it's much more likely to
-     * benefit from small integer optimizations; we should maybe flip the order
-     * here if we're downscaling the vertical resolution by a lot, though.
-     */
-    ret = add_filter(ctx, type, ops, SWS_OP_FILTER_H, src->width, dst->width);
-    if (ret < 0)
-        goto fail;
-    ret = add_filter(ctx, type, ops, SWS_OP_FILTER_V, src->height, dst->height);
-    if (ret < 0)
-        goto fail;
-
-    ret = ff_sws_encode_colors(ctx, type, ops, src, dst, &graph->incomplete);
-    if (ret < 0)
-        goto fail;
-    ret = ff_sws_encode_pixfmt(ops, dst->format);
-    if (ret < 0)
-        goto fail;
+        return ret;
 
     av_log(ctx, AV_LOG_VERBOSE, "Conversion pass for %s -> %s:\n",
            av_get_pix_fmt_name(src->format), av_get_pix_fmt_name(dst->format));
@@ -691,23 +653,40 @@ static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
     av_log(ctx, AV_LOG_DEBUG, "Unoptimized operation list:\n");
     ff_sws_op_list_print(ctx, AV_LOG_DEBUG, AV_LOG_TRACE, ops);
 
-    ret = ff_sws_compile_pass(graph, &ops, SWS_OP_FLAG_OPTIMIZE, input, output);
-    if (ret < 0)
-        goto fail;
+    return ff_sws_compile_pass(graph, NULL, &ops, SWS_OP_FLAG_OPTIMIZE, input, output);
+#else
+    return AVERROR(ENOTSUP);
+#endif
+}
 
-    ret = 0;
-    /* fall through */
+static bool prefer_ops_backend(SwsContext *ctx, const SwsFormat *src, const SwsFormat *dst)
+{
+    if (ctx->flags & SWS_UNSTABLE)
+        return true;
+    if (isFloat(src->format) || isFloat(dst->format))
+        return true; /* ops backend has better support for float formats */
+    return false; /* default to legacy for stability reasons */
+}
 
-fail:
-    ff_sws_op_list_free(&ops);
-    if (ret == AVERROR(ENOTSUP))
-        return add_legacy_sws_pass(graph, src, dst, input, output);
+static int add_convert_pass(SwsGraph *graph, const SwsFormat *src,
+                            const SwsFormat *dst, SwsPass *input,
+                            SwsPass **output)
+{
+    SwsContext *ctx = graph->ctx;
+    int ret;
+
+    if (prefer_ops_backend(ctx, src, dst)) {
+        ret = add_ops_convert_pass(graph, src, dst, input, output);
+        if (ret == AVERROR(ENOTSUP))
+            ret = add_legacy_sws_pass(graph, src, dst, input, output);
+    } else {
+        ret = add_legacy_sws_pass(graph, src, dst, input, output);
+        if (ret == AVERROR(ENOTSUP))
+            ret = add_ops_convert_pass(graph, src, dst, input, output);
+    }
+
     return ret;
 }
-#else
-#define add_convert_pass add_legacy_sws_pass
-#endif
-
 
 /**************************
  * Gamut and tone mapping *
@@ -845,13 +824,30 @@ static void sws_graph_worker(void *priv, int jobnr, int threadnr, int nb_jobs,
     pass->run(graph->exec.output, graph->exec.input, slice_y, slice_h, pass);
 }
 
-int ff_sws_graph_create(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *src,
-                        int field, SwsGraph **out_graph)
+SwsGraph *ff_sws_graph_alloc(void)
+{
+    return av_mallocz(sizeof(SwsGraph));
+}
+
+static void graph_uninit(SwsGraph *graph)
+{
+    avpriv_slicethread_free(&graph->slicethread);
+
+    for (int i = 0; i < graph->num_passes; i++)
+        pass_free(graph->passes[i]);
+    av_free(graph->passes);
+
+    memset(graph, 0, sizeof(*graph));
+}
+
+int ff_sws_graph_init(SwsGraph *graph, SwsContext *ctx, const SwsFormat *dst,
+                      const SwsFormat *src, int field)
 {
     int ret;
-    SwsGraph *graph = av_mallocz(sizeof(*graph));
-    if (!graph)
-        return AVERROR(ENOMEM);
+    if (graph->ctx) {
+        av_log(ctx, AV_LOG_ERROR, "Graph is already initialized\n");
+        return AVERROR(EINVAL);
+    }
 
     graph->ctx = ctx;
     graph->src = *src;
@@ -880,17 +876,34 @@ int ff_sws_graph_create(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *
 
     /* Resolve output buffers for all intermediate passes */
     for (int i = 0; i < graph->num_passes; i++) {
+        graph->backend |= graph->passes[i]->backend;
         ret = pass_alloc_output(graph->passes[i]->input);
         if (ret < 0)
             goto error;
     }
 
-    *out_graph = graph;
     return 0;
 
 error:
-    ff_sws_graph_free(&graph);
+    graph_uninit(graph);
     return ret;
+}
+
+int ff_sws_graph_create(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *src,
+                        int field, SwsGraph **out_graph)
+{
+    SwsGraph *graph = ff_sws_graph_alloc();
+    if (!graph)
+        return AVERROR(ENOMEM);
+
+    int ret = ff_sws_graph_init(graph, ctx, dst, src, field);
+    if (ret < 0) {
+        ff_sws_graph_free(&graph);
+        return ret;
+    }
+
+    *out_graph = graph;
+    return 0;
 }
 
 void ff_sws_graph_rollback(SwsGraph *graph, int since_idx)
@@ -906,12 +919,7 @@ void ff_sws_graph_free(SwsGraph **pgraph)
     if (!graph)
         return;
 
-    avpriv_slicethread_free(&graph->slicethread);
-
-    for (int i = 0; i < graph->num_passes; i++)
-        pass_free(graph->passes[i]);
-    av_free(graph->passes);
-
+    graph_uninit(graph);
     av_free(graph);
     *pgraph = NULL;
 }
@@ -931,24 +939,23 @@ static int opts_equal(const SwsContext *c1, const SwsContext *c2)
            c1->intent        == c2->intent        &&
            c1->scaler        == c2->scaler        &&
            c1->scaler_sub    == c2->scaler_sub    &&
+           c1->backends      == c2->backends      &&
            !memcmp(c1->scaler_params, c2->scaler_params, sizeof(c1->scaler_params));
 
 }
 
-int ff_sws_graph_reinit(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *src,
-                        int field, SwsGraph **out_graph)
+int ff_sws_graph_reinit(SwsGraph *graph, SwsContext *ctx, const SwsFormat *dst,
+                        const SwsFormat *src, int field)
 {
-    SwsGraph *graph = *out_graph;
-    if (graph && ff_fmt_equal(&graph->src, src) &&
-                 ff_fmt_equal(&graph->dst, dst) &&
-                 opts_equal(ctx, &graph->opts_copy))
+    if (ff_fmt_equal(&graph->src, src) && ff_fmt_equal(&graph->dst, dst) &&
+        opts_equal(ctx, &graph->opts_copy))
     {
         ff_sws_graph_update_metadata(graph, &src->color);
         return 0;
     }
 
-    ff_sws_graph_free(out_graph);
-    return ff_sws_graph_create(ctx, dst, src, field, out_graph);
+    graph_uninit(graph);
+    return ff_sws_graph_init(graph, ctx, dst, src, field);
 }
 
 void ff_sws_graph_update_metadata(SwsGraph *graph, const SwsColor *color)

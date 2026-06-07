@@ -81,6 +81,7 @@ struct SwsPass {
      * are always equal to (or smaller than, for the last slice) `slice_h`.
      */
     SwsPassFunc run;
+    SwsBackend backend; /* backend this pass is using, or 0 */
     enum AVPixelFormat format; /* new pixel format */
     int width, height; /* new output size */
     int slice_h;       /* filter granularity */
@@ -124,6 +125,7 @@ typedef struct SwsGraph {
     int num_threads; /* resolved at init() time */
     bool incomplete; /* set during init() if formats had to be inferred */
     bool noop;       /* set during init() if the graph is a no-op */
+    SwsBackend backend; /* backends this graph is using, set during init() */
 
     AVBufferRef *hw_frames_ref;
 
@@ -153,6 +155,18 @@ typedef struct SwsGraph {
         const SwsFrame *output;
     } exec;
 } SwsGraph;
+
+/**
+ * Allocate an empty SwsGraph. Returns NULL on failure.
+ */
+SwsGraph *ff_sws_graph_alloc(void);
+
+/**
+ * Initialize the filter graph for a given pair of formats. Returns 0 or a
+ * negative error.
+ */
+int ff_sws_graph_init(SwsGraph *graph, SwsContext *ctx, const SwsFormat *dst,
+                      const SwsFormat *src, int field);
 
 /**
  * Allocate and initialize the filter graph. Returns 0 or a negative error.
@@ -200,13 +214,14 @@ void ff_sws_graph_free(SwsGraph **graph);
 void ff_sws_graph_update_metadata(SwsGraph *graph, const SwsColor *color);
 
 /**
- * Wrapper around ff_sws_graph_create() that reuses the existing graph if the
+ * Wrapper around ff_sws_graph_init() that reuses the existing graph if the
  * format is compatible. This will also update dynamic per-frame metadata.
- * Must be called after changing any of the fields in `ctx`, or else they will
- * have no effect.
+ *
+ * Must also be called after changing any of the fields in `ctx`, or else they
+ * will have no effect.
  */
-int ff_sws_graph_reinit(SwsContext *ctx, const SwsFormat *dst, const SwsFormat *src,
-                        int field, SwsGraph **graph);
+int ff_sws_graph_reinit(SwsGraph *graph, SwsContext *ctx, const SwsFormat *dst,
+                        const SwsFormat *src, int field);
 
 /**
  * Dispatch the filter graph on a single field of the given frames. Internally

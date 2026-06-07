@@ -27,6 +27,7 @@
  */
 
 #include "config.h"
+#include "libavutil/attributes.h"
 
 #if CONFIG_ZLIB
 #include <zlib.h>
@@ -71,6 +72,7 @@ const AVMetadataConv ff_id3v2_4_metadata_conv[] = {
     { "TSOA", "album-sort"    },
     { "TSOP", "artist-sort"   },
     { "TSOT", "title-sort"    },
+    { "TSST", "disc_subtitle" },
     { "TIT1", "grouping"      },
     { 0 }
 };
@@ -282,6 +284,7 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
         switch (bom) {
         case 0xfffe:
             get = avio_rl16;
+            break;
         case 0xfeff:
             break;
         case 0: // empty string without bom
@@ -293,7 +296,7 @@ static int decode_str(AVFormatContext *s, AVIOContext *pb, int encoding,
             *maxread = left;
             return AVERROR_INVALIDDATA;
         }
-        // fall-through
+        av_fallthrough;
 
     case ID3v2_ENCODING_UTF16BE:
         while ((left > 1) && ch) {
@@ -1018,41 +1021,60 @@ static void id3v2_parse(AVIOContext *pb, AVDictionary **metadata,
             }
 
 #if CONFIG_ZLIB
-                if (tcomp) {
-                    int err;
+            if (tcomp) {
+                int err;
 
-                    av_log(s, AV_LOG_DEBUG, "Compressed frame %s tlen=%d dlen=%ld\n", tag, tlen, dlen);
+                av_log(s, AV_LOG_DEBUG, "Compressed frame %s tlen=%d dlen=%ld\n", tag, tlen, dlen);
 
-                    if (tlen <= 0)
-                        goto seek;
-                    if (dlen / 32768 > tlen)
-                        goto seek;
+                if (tlen <= 0)
+                    goto seek;
+                if (dlen / 32768 > tlen)
+                    goto seek;
 
-                    av_fast_malloc(&uncompressed_buffer, &uncompressed_buffer_size, dlen);
-                    if (!uncompressed_buffer) {
-                        av_log(s, AV_LOG_ERROR, "Failed to alloc %ld bytes\n", dlen);
-                        goto seek;
-                    }
-
-                    if (!(unsync || tunsync)) {
-                        err = avio_read(pb, buffer, tlen);
-                        if (err < 0) {
-                            av_log(s, AV_LOG_ERROR, "Failed to read compressed tag\n");
-                            goto seek;
-                        }
-                        tlen = err;
-                    }
-
-                    err = uncompress(uncompressed_buffer, &dlen, buffer, tlen);
-                    if (err != Z_OK) {
-                        av_log(s, AV_LOG_ERROR, "Failed to uncompress tag: %d\n", err);
-                        goto seek;
-                    }
-                    ffio_init_read_context(&pb_local, uncompressed_buffer, dlen);
-                    tlen = dlen;
-                    pbx = &pb_local.pub; // read from sync buffer
+                av_fast_malloc(&uncompressed_buffer, &uncompressed_buffer_size, dlen);
+                if (!uncompressed_buffer) {
+                    av_log(s, AV_LOG_ERROR, "Failed to alloc %ld bytes\n", dlen);
+                    goto seek;
                 }
+
+                if (!(unsync || tunsync)) {
+                    err = avio_read(pb, buffer, tlen);
+                    if (err < 0) {
+                        av_log(s, AV_LOG_ERROR, "Failed to read compressed tag\n");
+                        goto seek;
+                    }
+                    tlen = err;
+                }
+
+                err = uncompress(uncompressed_buffer, &dlen, buffer, tlen);
+                if (err != Z_OK) {
+                    av_log(s, AV_LOG_ERROR, "Failed to uncompress tag: %d\n", err);
+                    goto seek;
+                }
+                ffio_init_read_context(&pb_local, uncompressed_buffer, dlen);
+                tlen = dlen;
+                pbx = &pb_local.pub; // read from sync buffer
+            }
 #endif
+            if (s && (s->debug & AV_FDEBUG_ID3V2)) {
+                int64_t pos = avio_tell(pbx);
+                uint8_t *buf = av_malloc(tlen + 3U);
+                if (buf) {
+                    int n = avio_read(pbx, buf + 1, tlen);
+                    if (n >= 0) {
+                        buf[0] = '|';
+                        for (unsigned i = 1; i <= n; i++)
+                            if (!(buf[i] >= 0x20 && buf[i] < 0x7f))
+                                buf[i] = '.';
+                        buf[n + 1] = '|';
+                        buf[n + 2] = '\0';
+                        av_log(s, AV_LOG_INFO, "ID3v2 frame %.4s (%d bytes):%s\n",
+                               tag, tlen, buf);
+                    }
+                    av_free(buf);
+                    avio_seek(pbx, pos, SEEK_SET);
+                }
+            }
             if (tag[0] == 'T')
                 /* parse text tag */
                 read_ttag(s, pbx, tlen, metadata, tag);

@@ -1,3 +1,4 @@
+ifeq ($(CONFIG_CHECKASM),yes)
 FATE_CHECKASM = fate-checkasm-aacencdsp                                 \
                 fate-checkasm-aacpsdsp                                  \
                 fate-checkasm-ac3dsp                                    \
@@ -83,6 +84,7 @@ FATE_CHECKASM = fate-checkasm-aacencdsp                                 \
                 fate-checkasm-vf_hflip                                  \
                 fate-checkasm-vf_idet                                   \
                 fate-checkasm-vf_nlmeans                                \
+                fate-checkasm-vf_pp7                                    \
                 fate-checkasm-vf_threshold                              \
                 fate-checkasm-vf_sobel                                  \
                 fate-checkasm-videodsp                                  \
@@ -101,3 +103,5 @@ $(FATE_CHECKASM): CMP = null
 
 FATE += $(FATE_CHECKASM)
 fate-checkasm: $(FATE_CHECKASM)
+
+endif # CONFIG_CHECKASM

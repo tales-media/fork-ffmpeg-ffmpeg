@@ -18,6 +18,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 
+#include "libavutil/attributes.h"
 #include "libavutil/avassert.h"
 #include "libavutil/bswap.h"
 #include "libavutil/rational.h"
@@ -45,7 +46,7 @@ static bool op_commute_clear(SwsOp *op, SwsOp *next)
     switch (next->op) {
     case SWS_OP_CONVERT:
         op->type = next->convert.to;
-        /* fall through */
+        av_fallthrough;
     case SWS_OP_LSHIFT:
     case SWS_OP_RSHIFT:
     case SWS_OP_DITHER:
@@ -109,7 +110,7 @@ static bool op_commute_swizzle(SwsOp *op, SwsOp *next)
     switch (next->op) {
     case SWS_OP_CONVERT:
         op->type = next->convert.to;
-        /* fall through */
+        av_fallthrough;
     case SWS_OP_SWAP_BYTES:
     case SWS_OP_LSHIFT:
     case SWS_OP_RSHIFT:
@@ -333,6 +334,16 @@ static bool extract_swizzle(SwsLinearOp *op, SwsComps prev, SwsSwizzleOp *out_sw
     c.mask = ff_sws_linear_mask(c);
     *out_swiz = swiz;
     *op = c;
+    return true;
+}
+
+static int op_result_is_exact(const SwsOp *op)
+{
+    for (int i = 0; i < 4; i++) {
+        if (SWS_OP_NEEDED(op, i) && !(op->comps.flags[i] & SWS_COMP_EXACT))
+            return false;
+    }
+
     return true;
 }
 
@@ -768,9 +779,10 @@ retry:
         }
 
         case SWS_OP_SCALE:
-            /* Scaling by integer before conversion to int */
+            /* Exact integer multiplication */
             if (op->scale.factor.den == 1 && next->op == SWS_OP_CONVERT &&
-                ff_sws_pixel_type_is_int(next->convert.to))
+                ff_sws_pixel_type_is_int(next->convert.to) &&
+                op_result_is_exact(op))
             {
                 op->type = next->convert.to;
                 FFSWAP(SwsOp, *op, *next);
