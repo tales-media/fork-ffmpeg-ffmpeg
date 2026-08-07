@@ -967,9 +967,9 @@ RUN \
 # bump: xeve link "CHANGELOG" https://github.com/mpeg5/xeve/releases/tag/v$LATEST
 # TODO: better -DARM? possible to build on non arm and intel?
 # TODO: report upstream about lib/libxeve.a?
-ARG XEVE_VERSION=0.5.1
+ARG XEVE_VERSION=0.6.0
 ARG XEVE_URL="https://github.com/mpeg5/xeve/archive/refs/tags/v$XEVE_VERSION.tar.gz"
-ARG XEVE_SHA256=238c95ddd1a63105913d9354045eb329ad9002903a407b5cf1ab16bad324c245
+ARG XEVE_SHA256=b617983b5e3bbdb1a01ea4fd3638d1600c3b7a344634a2ceea398412357f9a70
 RUN \
   wget $WGET_OPTS -O xeve.tar.gz "$XEVE_URL" && \
   echo "$XEVE_SHA256  xeve.tar.gz" | sha256sum -c - && \
