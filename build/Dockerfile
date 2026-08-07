@@ -991,9 +991,9 @@ RUN \
 # bump: xevd link "CHANGELOG" https://github.com/mpeg5/xevd/releases/tag/v$LATEST
 # TODO: better -DARM? possible to build on non arm and intel?
 # TODO: report upstream about lib/libxevd.a?
-ARG XEVD_VERSION=0.5.0
+ARG XEVD_VERSION=0.6.0
 ARG XEVD_URL="https://github.com/mpeg5/xevd/archive/refs/tags/v$XEVD_VERSION.tar.gz"
-ARG XEVD_SHA256=8d55c7ec1a9ad4e70fe91fbe129a1d4dd288bce766f466cba07a29452b3cecd8
+ARG XEVD_SHA256=406c8292f69c96d8a2cf7751d13867460c444ef678e94b331c1cf33c2dcf7f53
 RUN \
   wget $WGET_OPTS -O xevd.tar.gz "$XEVD_URL" && \
   echo "$XEVD_SHA256  xevd.tar.gz" | sha256sum -c - && \
