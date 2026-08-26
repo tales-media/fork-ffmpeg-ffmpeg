@@ -26,11 +26,12 @@
 
 #include "avformat.h"
 #include "movenccenc.h"
-#include "libavcodec/packet_internal.h"
+#include "packet_internal.h"
 
 #define MOV_FRAG_INFO_ALLOC_INCREMENT 64
 #define MOV_INDEX_CLUSTER_SIZE 1024
 #define MOV_TIMESCALE 1000
+#define MOV_TIMESCALE_Q (AVRational){1, 1000}
 
 #define RTP_MAX_PACKET_SIZE 1450
 
@@ -302,6 +303,9 @@ typedef struct MOVMuxContext {
 #define FF_MOV_FLAG_HYBRID_FRAGMENTED     (1 << 24)
 
 int ff_mov_write_packet(AVFormatContext *s, AVPacket *pkt);
+
+int ff_mov_set_fragment_end_hint(AVFormatContext *s, int stream_index,
+                                 const AVPacket *pkt, AVRational src_time_base);
 
 int ff_mov_init_hinting(AVFormatContext *s, int index, int src_index);
 int ff_mov_add_hinted_packet(AVFormatContext *s, AVPacket *pkt,

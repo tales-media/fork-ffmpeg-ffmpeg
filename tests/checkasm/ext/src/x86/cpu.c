@@ -131,6 +131,14 @@ COLD void checkasm_init_x86(void)
 #if ARCH_X86_32 && defined(_WIN32)
     /* x86_32 processes on Windows can spuriously get the dirty ymm bit set
      * while running; skip checking this aspect. */
+#elif defined(_MSC_VER) && !defined(__clang__)
+    /* MSVC can spontaneously generate code that uses AVX registers, without
+     * properly clearing the state afterwards with vzeroupper, see
+     * https://developercommunity.visualstudio.com/t/MSVC-x64-autovectorized-AVX-code-omits-f/11102637.
+     * Skip the vzeroupper tests in this configuration. This is technically
+     * inaccurate - checkasm as a library may be built with a different
+     * toolchain than the user code under test - but it is a first rough
+     * approximation. */
 #else
     checkasm_check_vzeroupper = 1;
 #endif
@@ -159,7 +167,7 @@ static COLD checkasm_simd_warmup_func get_simd_warmup(void)
         return simd_warmup;
 
     checkasm_cpu_cpuid(&r, 7, 0);
-    if (r.ebx & 0x00000020) /* AVX512F */
+    if (r.ebx & 0x00010000) /* AVX512F */
         simd_warmup = checkasm_warmup_avx512;
 
     return simd_warmup;

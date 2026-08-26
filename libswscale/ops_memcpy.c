@@ -43,12 +43,12 @@ static void process(const SwsOpExec *exec, const void *priv,
 {
     const MemcpyPriv *p = priv;
     const int lines = y_end - y_start;
-    const int bytes = x_end * exec->block_size_out;
     av_assert1(x_start == 0 && x_end == exec->width);
 
     for (int i = 0; i < p->num_planes; i++) {
         uint8_t *out = exec->out[i];
         const int idx = p->index[i];
+        const int bytes = x_end * exec->block_size_out[i];
         const int use_loop = exec->out_stride[i] > bytes + SWS_MAX_PADDING;
         if (idx < 0 && !use_loop) {
             memset(out, p->clear_value[i], exec->out_stride[i] * lines);
@@ -57,6 +57,9 @@ static void process(const SwsOpExec *exec, const void *priv,
                 memset(out, p->clear_value[i], bytes);
                 out += exec->out_stride[i];
             }
+        } else if (out == exec->in[idx]) {
+            av_assert1(exec->out_stride[i] == exec->in_stride[idx]);
+            continue; /* plane was already ref'd */
         } else if (exec->out_stride[i] == exec->in_stride[idx] && !use_loop) {
             memcpy(out, exec->in[idx], exec->out_stride[i] * lines);
         } else {
@@ -70,7 +73,7 @@ static void process(const SwsOpExec *exec, const void *priv,
     }
 }
 
-static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
+static int compile(SwsContext *ctx, const SwsOpList *ops, SwsCompiledOp *out)
 {
     MemcpyPriv p = {0};
 
@@ -78,7 +81,7 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
         const SwsOp *op = &ops->ops[n];
         switch (op->op) {
         case SWS_OP_READ:
-            if ((op->rw.packed && op->rw.elems != 1) || op->rw.frac || op->rw.filter)
+            if (ff_sws_rw_op_planes(op) != op->rw.elems || op->rw.frac || op->rw.filter.op)
                 return AVERROR(ENOTSUP);
             for (int i = 0; i < op->rw.elems; i++)
                 p.index[i] = i;
@@ -121,7 +124,7 @@ static int compile(SwsContext *ctx, SwsOpList *ops, SwsCompiledOp *out)
             break;
 
         case SWS_OP_WRITE:
-            if ((op->rw.packed && op->rw.elems != 1) || op->rw.frac || op->rw.filter)
+            if (ff_sws_rw_op_planes(op) != op->rw.elems || op->rw.frac || op->rw.filter.op)
                 return AVERROR(ENOTSUP);
             p.num_planes = op->rw.elems;
             break;

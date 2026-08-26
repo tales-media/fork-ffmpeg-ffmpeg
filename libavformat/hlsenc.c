@@ -30,12 +30,14 @@
 
 #include "libavutil/attributes_internal.h"
 #include "libavutil/avassert.h"
+#include "libavutil/macros.h"
 #include "libavutil/mathematics.h"
 #include "libavutil/avstring.h"
 #include "libavutil/bprint.h"
 #include "libavutil/intreadwrite.h"
 #include "libavutil/mem.h"
 #include "libavutil/opt.h"
+#include "libavutil/parseutils.h"
 #include "libavutil/log.h"
 #include "libavutil/random_seed.h"
 #include "libavutil/time.h"
@@ -51,6 +53,9 @@
 #include "hlsplaylist.h"
 #include "internal.h"
 #include "mux.h"
+#if CONFIG_MP4_MUXER
+#include "movenc.h"
+#endif
 #include "os_support.h"
 #include "url.h"
 
@@ -80,8 +85,6 @@ typedef struct HLSSegment {
     int discont;
     int64_t pos;
     int64_t size;
-    int64_t keyframe_pos;
-    int64_t keyframe_size;
     unsigned var_stream_idx;
 
     const char *key_uri;
@@ -141,8 +144,6 @@ typedef struct VariantStream {
     int64_t start_pts;
     int64_t end_pts;
     int64_t video_lastpos;
-    int64_t video_keyframe_pos;
-    int64_t video_keyframe_size;
     double duration;      // last segment duration computed so far, in seconds
     int64_t start_pos;    // last segment starting position
     int64_t size;         // last segment size
@@ -795,6 +796,7 @@ static int hls_mux_init(AVFormatContext *s, VariantStream *vs)
     oc->io_open                  = s->io_open;
     oc->io_close2                = s->io_close2;
     oc->strict_std_compliance    = s->strict_std_compliance;
+    oc->flags                    = s->flags;
     av_dict_copy(&oc->metadata, s->metadata, 0);
 
     if (vs->vtt_oformat) {
@@ -802,6 +804,7 @@ static int hls_mux_init(AVFormatContext *s, VariantStream *vs)
         if (ret < 0)
             return ret;
         vtt_oc          = vs->vtt_avf;
+        vtt_oc->flags   = s->flags;
         av_dict_copy(&vtt_oc->metadata, s->metadata, 0);
     }
 
@@ -1084,8 +1087,6 @@ static int hls_append_segment(struct AVFormatContext *s, HLSContext *hls,
     en->duration = duration;
     en->pos      = pos;
     en->size     = size;
-    en->keyframe_pos      = vs->video_keyframe_pos;
-    en->keyframe_size     = vs->video_keyframe_size;
 
     if (vs->discontinuity) {
         en->discont = 1;
@@ -1143,20 +1144,31 @@ static int hls_append_segment(struct AVFormatContext *s, HLSContext *hls,
     return 0;
 }
 
-static int extract_segment_number(const char *filename) {
+static int extract_segment_number(const char *filename)
+{
     const char *dot = strrchr(filename, '.');
-    const char *num_start = dot - 1;
+    const char *num_start;
+    char *end;
+    long value;
 
-    while (num_start > filename && *num_start >= '0' && *num_start <= '9') {
+    if (!dot)
+        return -1;
+    if (dot == filename)
+        return -1;
+
+    num_start = dot;
+    while (num_start > filename &&
+           num_start[-1] >= '0' && num_start[-1] <= '9')
         num_start--;
-    }
-
-    num_start++;
-
     if (num_start == dot)
         return -1;
 
-    return atoi(num_start);
+    errno = 0;
+    value = strtol(num_start, &end, 10);
+    if (errno == ERANGE || end != dot || value > INT_MAX)
+        return -1;
+
+    return (int)value;
 }
 
 static int parse_playlist(AVFormatContext *s, const char *url, VariantStream *vs)
@@ -1203,11 +1215,13 @@ static int parse_playlist(AVFormatContext *s, const char *url, VariantStream *vs
             ptr = av_stristr(line, "URI=\"");
             if (ptr) {
                 ptr += strlen("URI=\"");
-                end = av_stristr(ptr, ",");
+                end = strchr(ptr, '"');
                 if (end) {
-                    av_strlcpy(vs->key_uri, ptr, end - ptr);
+                    av_strlcpy(vs->key_uri, ptr,
+                               FFMIN(end - ptr + 1, sizeof(vs->key_uri)));
                 } else {
-                    av_strlcpy(vs->key_uri, ptr, sizeof(vs->key_uri));
+                    ret = AVERROR_INVALIDDATA;
+                    goto fail;
                 }
             }
 
@@ -1216,29 +1230,32 @@ static int parse_playlist(AVFormatContext *s, const char *url, VariantStream *vs
                 ptr += strlen("IV=0x");
                 end = av_stristr(ptr, ",");
                 if (end) {
-                    av_strlcpy(vs->iv_string, ptr, end - ptr);
+                    av_strlcpy(vs->iv_string, ptr, FFMIN(end - ptr + 1, sizeof(vs->iv_string)));
                 } else {
                     av_strlcpy(vs->iv_string, ptr, sizeof(vs->iv_string));
                 }
             }
         } else if (av_strstart(line, "#EXT-X-PROGRAM-DATE-TIME:", &ptr)) {
-            struct tm program_date_time;
-            int y,M,d,h,m,sec;
-            double ms;
-            if (sscanf(ptr, "%d-%d-%dT%d:%d:%d.%lf", &y, &M, &d, &h, &m, &sec, &ms) != 7) {
+            struct tm program_date_time = { 0 };
+            double ms = 0;
+            char *q = av_small_strptime(ptr, "%Y-%m-%dT%H:%M:%S", &program_date_time);
+
+            if (!q) {
                 ret = AVERROR_INVALIDDATA;
                 goto fail;
             }
-
-            program_date_time.tm_year = y - 1900;
-            program_date_time.tm_mon = M - 1;
-            program_date_time.tm_mday = d;
-            program_date_time.tm_hour = h;
-            program_date_time.tm_min = m;
-            program_date_time.tm_sec = sec;
+            if (*q == '.')
+                ms = atof(q + 1);
             program_date_time.tm_isdst = -1;
 
-            discont_program_date_time = mktime(&program_date_time);
+            errno = 0;
+            time_t t = mktime(&program_date_time);
+            if (t == (time_t)-1 && errno == EOVERFLOW) {
+                ret = AVERROR_INVALIDDATA;
+                goto fail;
+            }
+            discont_program_date_time = t;
+
             discont_program_date_time += (double)(ms / 1000);
         } else if (av_strstart(line, "#", NULL)) {
             continue;
@@ -1472,6 +1489,7 @@ static int create_master_playlist(AVFormatContext *s,
             avg_bandwidth = vs->avg_bitrate;
         } else {
             bandwidth = 0;
+            avg_bandwidth = 0;
             if (vid_st)
                 bandwidth += get_stream_bit_rate(vid_st);
             if (aud_st)
@@ -1616,7 +1634,7 @@ static int hls_window(AVFormatContext *s, int last, VariantStream *vs)
                                       en->size, en->pos, hls->baseurl,
                                       en->filename,
                                       en->discont_program_date_time ? &en->discont_program_date_time : prog_date_time_p,
-                                      en->keyframe_size, en->keyframe_pos, hls->flags & HLS_I_FRAMES_ONLY);
+                                      hls->flags & HLS_I_FRAMES_ONLY);
         if (en->discont_program_date_time)
             en->discont_program_date_time -= en->duration;
         if (ret < 0) {
@@ -1640,7 +1658,7 @@ static int hls_window(AVFormatContext *s, int last, VariantStream *vs)
         for (en = vs->segments; en; en = en->next) {
             ret = ff_hls_write_file_entry(hls->sub_m3u8_out, en->discont, byterange_mode,
                                           en->duration, 0, en->size, en->pos,
-                                          hls->baseurl, en->sub_filename, NULL, 0, 0, 0);
+                                          hls->baseurl, en->sub_filename, NULL, 0);
             if (ret < 0) {
                 av_log(s, AV_LOG_WARNING, "ff_hls_write_file_entry get error\n");
             }
@@ -2505,6 +2523,11 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
         int byterange_mode = (hls->flags & HLS_SINGLE_FILE) || (hls->max_seg_size > 0);
         double cur_duration;
 
+#if CONFIG_MP4_MUXER
+        if (hls->segment_type == SEGMENT_TYPE_FMP4 && is_ref_pkt &&
+            pkt->dts != AV_NOPTS_VALUE)
+            ff_mov_set_fragment_end_hint(oc, stream_index, pkt, st->time_base);
+#endif
         av_write_frame(oc, NULL); /* Flush any buffered data */
         new_start_pos = avio_tell(oc->pb);
         vs->size = new_start_pos - vs->start_pos;
@@ -2678,12 +2701,6 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
     vs->packets_written++;
     if (oc->pb) {
         ret = ff_write_chained(oc, stream_index, pkt, s, 0);
-        vs->video_keyframe_size += pkt->size;
-        if ((st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) && (pkt->flags & AV_PKT_FLAG_KEY)) {
-            vs->video_keyframe_size = avio_tell(oc->pb);
-        } else {
-            vs->video_keyframe_pos = avio_tell(vs->out);
-        }
         if (hls->ignore_io_errors)
             ret = 0;
     }

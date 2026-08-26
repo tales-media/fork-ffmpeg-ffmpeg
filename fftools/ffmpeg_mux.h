@@ -81,9 +81,6 @@ typedef struct MuxStream {
     int             copy_initial_nonkeyframes;
     int             copy_prior_start;
     int             streamcopy_started;
-#if FFMPEG_OPT_VSYNC_DROP
-    int             ts_drop;
-#endif
 
     AVRational      frame_rate;
     AVRational      min_frame_rate;

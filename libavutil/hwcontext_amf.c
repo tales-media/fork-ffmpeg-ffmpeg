@@ -558,10 +558,40 @@ static void amf_device_uninit(AVHWDeviceContext *device_ctx)
     amf_ctx->version = 0;
 }
 
+enum AMF_MEMORY_TYPE av_amf_get_memory_type(AVAMFDeviceContext *amf_ctx)
+{
+    AMFContext  *context = amf_ctx->context;
+    AMFContext1 *context1 = NULL;
+    AMFGuid guid1 = IID_AMFContext1();
+
+    if (!amf_ctx)
+        return AMF_MEMORY_UNKNOWN;
+
+#ifdef _WIN32
+    if (AMF_IFACE_CALL(context, GetDX11Device, AMF_DX11_1))
+        return AMF_MEMORY_DX11;
+
+    if (AMF_IFACE_CALL(context, GetDX9Device, AMF_DX9))
+        return AMF_MEMORY_DX9;
+#endif
+
+    if (AMF_IFACE_CALL(context, QueryInterface, &guid1, (void**)&context1) != AMF_OK)
+        return AMF_MEMORY_UNKNOWN;
+
+    if (AMF_IFACE_CALL(context1, GetVulkanDevice)) {
+        context1->pVtbl->Release(context1);
+        return AMF_MEMORY_VULKAN;
+    }
+
+    return AMF_MEMORY_UNKNOWN;
+}
+
 static int amf_device_init(AVHWDeviceContext *ctx)
 {
     AVAMFDeviceContext *amf_ctx = ctx->hwctx;
+    AMFContext *context = amf_ctx->context;
     AMFContext1 *context1 = NULL;
+    AMFGuid guid1 = IID_AMFContext1();
     AMF_RESULT res;
 
     if (!amf_ctx->lock) {
@@ -574,34 +604,43 @@ static int amf_device_init(AVHWDeviceContext *ctx)
         amf_ctx->unlock = amf_unlock_default;
     }
 
-#ifdef _WIN32
-    res = amf_ctx->context->pVtbl->InitDX11(amf_ctx->context, NULL, AMF_DX11_1);
-    if (res == AMF_OK || res == AMF_ALREADY_INITIALIZED) {
-        av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D11.\n");
-    } else {
-        res = amf_ctx->context->pVtbl->InitDX9(amf_ctx->context, NULL);
-        if (res == AMF_OK) {
-            av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via D3D9.\n");
-        } else {
-#endif
-            AMFGuid guid = IID_AMFContext1();
-            res = amf_ctx->context->pVtbl->QueryInterface(amf_ctx->context, &guid, (void**)&context1);
-            AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+    if (av_amf_get_memory_type(amf_ctx) != AMF_MEMORY_UNKNOWN) {
+        av_log(ctx, AV_LOG_VERBOSE, "AMF is already initialized, skipping init.\n");
+        return 0;
+    }
 
-            res = context1->pVtbl->InitVulkan(context1, NULL);
-            context1->pVtbl->Release(context1);
-            if (res != AMF_OK && res != AMF_ALREADY_INITIALIZED) {
-                if (res == AMF_NOT_SUPPORTED)
-                    av_log(ctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
-                else
-                    av_log(ctx, AV_LOG_ERROR, "AMF failed to initialise on the given Vulkan device: %d.\n", res);
-                 return AVERROR(ENOSYS);
-            }
-            av_log(ctx, AV_LOG_VERBOSE, "AMF initialisation succeeded via Vulkan.\n");
 #ifdef _WIN32
-        }
-     }
+    res = AMF_IFACE_CALL(context, InitDX11, NULL, AMF_DX11_1);
+    if (res == AMF_OK) {
+        av_log(ctx, AV_LOG_VERBOSE, "Successfully initialized AMF via D3D11.\n");
+        return 0;
+    }
+
+    res = AMF_IFACE_CALL(context, InitDX9, NULL);
+    if (res == AMF_OK) {
+        av_log(ctx, AV_LOG_VERBOSE, "Successfully initialized AMF via D3D9.\n");
+        return 0;
+    }
+
+    av_log(ctx, AV_LOG_WARNING, "AMF failed to initialize with any of supported versions of DirectX, trying Vulkan instead...\n");
 #endif
+
+    res = AMF_IFACE_CALL(context, QueryInterface, &guid1, (void**)&context1);
+    AMF_RETURN_IF_FALSE(ctx, res == AMF_OK, AVERROR_UNKNOWN, "CreateContext1() failed with error %d\n", res);
+
+    res = AMF_IFACE_CALL(context1, InitVulkan, NULL);
+    AMF_IFACE_CALL(context1, Release);
+
+    if (res == AMF_OK)
+        av_log(ctx, AV_LOG_VERBOSE, "Successfully initialized AMF via Vulkan.\n");
+    else {
+        if (res == AMF_NOT_SUPPORTED)
+            av_log(ctx, AV_LOG_ERROR, "AMF via Vulkan is not supported on the given device.\n");
+        else
+            av_log(ctx, AV_LOG_ERROR, "Failed to initialize AMF via Vulkan, error %d\n", res);
+
+        return AVERROR(ENOSYS);
+    }
 
     return 0;
 }
@@ -819,6 +858,77 @@ static int amf_device_derive(AVHWDeviceContext *device_ctx,
     }
 }
 
+static void amf_unmap_frame(av_unused AVHWFramesContext *unused, HWMapDescriptor *hwmap)
+{
+    AMFSurface1 *surface1 = hwmap->priv;
+    AMF_IFACE_CALL(surface1, Unmap);
+    AMF_IFACE_CALL(surface1, Release);
+}
+
+static int amf_map_frame(AVHWFramesContext *device_ctx, AVFrame *dst, const AVFrame *src, int flags)
+{
+    AMFSurface *surface = (AMFSurface *)src->data[0];
+    AMFSurface1 *surface1 = NULL;
+    size_t *linesizes = NULL;
+    uint8_t **map = NULL;
+    int amf_mem_flags = AMF_MEMORY_CPU_NONE;
+    const AMFGuid guid = IID_AMFSurface1();
+    AMF_RESULT res = AMF_FAIL;
+    size_t plane_count = 0;
+    int ret = -1;
+
+    AMF_RETURN_IF_FALSE(device_ctx, surface != NULL, AVERROR(EINVAL) , "Source surface is null");
+
+    res = AMF_IFACE_CALL(surface, QueryInterface, &guid, (void**)&surface1);
+    AMF_RETURN_IF_FALSE(device_ctx, res == AMF_OK, AVERROR_UNKNOWN, "QueryInterface(AMFSurface1) failed with error %d\n", res);
+
+    if (flags & AV_HWFRAME_MAP_READ)
+        amf_mem_flags |= AMF_MEMORY_CPU_READ;
+
+    if (flags & AV_HWFRAME_MAP_WRITE)
+        amf_mem_flags |= AMF_MEMORY_CPU_WRITE;
+
+    plane_count = AMF_IFACE_CALL(surface, GetPlanesCount);
+    linesizes = av_malloc_array(sizeof(size_t), plane_count);
+    AMF_GOTO_FAIL_IF_FALSE(device_ctx, linesizes, AVERROR(ENOMEM), "Unable to allocate line sizes array\n");
+
+    map = av_malloc_array(sizeof(uint8_t *), plane_count);
+    AMF_GOTO_FAIL_IF_FALSE(device_ctx, map, AVERROR(ENOMEM), "Unable to allocate mapping buffer\n");
+
+    dst->format = av_amf_to_av_format(AMF_IFACE_CALL(surface, GetFormat));
+
+    res = AMF_IFACE_CALL(surface1, Map, amf_mem_flags, plane_count, linesizes, (void**)map);
+    AMF_GOTO_FAIL_IF_FALSE(device_ctx, res == AMF_OK, AVERROR_UNKNOWN, "AMFSurface1->Map() failed with error %d\n", res);
+
+    ret = ff_hwframe_map_create(src->hw_frames_ctx, dst, src, &amf_unmap_frame, surface1);
+    AMF_GOTO_FAIL_IF_FALSE(device_ctx, ret >= 0, ret, "ff_hwframe_map_create failed with error %d\n", ret);
+
+    dst->width  = src->width;
+    dst->height = src->height;
+    av_frame_copy_props(dst, src);
+
+    // The dst frame is no longer a hardware frame, from the perspective of any dst frame consumer.
+    av_buffer_unref(&dst->hw_frames_ctx);
+
+    for (int plane = 0; plane < plane_count; ++plane)
+    {
+        dst->data[plane] = map[plane];
+        dst->linesize[plane] = linesizes[plane];
+    }
+
+fail:
+    if (map)
+        av_free(map);
+
+    if (linesizes)
+        av_free(linesizes);
+
+    if (ret < 0 && surface1 != NULL)
+        AMF_IFACE_CALL(surface1, Release);
+
+    return ret;
+}
+
 const HWContextType ff_hwcontext_type_amf = {
     .type                 = AV_HWDEVICE_TYPE_AMF,
     .name                 = "AMF",
@@ -836,6 +946,7 @@ const HWContextType ff_hwcontext_type_amf = {
     .transfer_get_formats = amf_transfer_get_formats,
     .transfer_data_to     = amf_transfer_data_to,
     .transfer_data_from   = amf_transfer_data_from,
+    .map_from             = amf_map_frame,
 
     .pix_fmts             = (const enum AVPixelFormat[]){ AV_PIX_FMT_AMF_SURFACE, AV_PIX_FMT_NONE },
 };

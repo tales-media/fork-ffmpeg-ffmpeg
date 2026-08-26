@@ -1,5 +1,9 @@
 OBJS                                   += x86/constants.o               \
 
+EMMS_OBJS_$(HAVE_MMX_INLINE)_$(HAVE_MMX_EXTERNAL)_$(HAVE_MM_EMPTY) = x86/emms.o
+# Add internal copy of ff_emms() to lavc for shared builds (if needed).
+SHLIBOBJS                              += $(EMMS_OBJS__yes_)
+
 # subsystems
 X86ASM-OBJS-$(CONFIG_AC3DSP)           += x86/ac3dsp_init.o
 X86ASM-OBJS-$(CONFIG_AUDIODSP)         += x86/audiodsp_init.o
@@ -8,7 +12,6 @@ X86ASM-OBJS-$(CONFIG_BSWAPDSP)         += x86/bswapdsp_init.o
 X86ASM-OBJS-$(CONFIG_DIRAC_DECODER)    += x86/diracdsp_init.o           \
                                           x86/dirac_dwt_init.o
 OBJS-$(CONFIG_FDCTDSP)                 += x86/fdctdsp_init.o x86/fdct.o
-X86ASM-OBJS-$(CONFIG_FMTCONVERT)       += x86/fmtconvert_init.o
 X86ASM-OBJS-$(CONFIG_H263DSP)          += x86/h263dsp_init.o
 X86ASM-OBJS-$(CONFIG_H264CHROMA)       += x86/h264chroma_init.o
 X86ASM-OBJS-$(CONFIG_H264DSP)          += x86/h264dsp_init.o
@@ -91,7 +94,6 @@ X86ASM-OBJS-$(CONFIG_AC3DSP)           += x86/ac3dsp.o                  \
 X86ASM-OBJS-$(CONFIG_AUDIODSP)         += x86/audiodsp.o
 X86ASM-OBJS-$(CONFIG_BLOCKDSP)         += x86/blockdsp.o
 X86ASM-OBJS-$(CONFIG_BSWAPDSP)         += x86/bswapdsp.o
-X86ASM-OBJS-$(CONFIG_FMTCONVERT)       += x86/fmtconvert.o
 X86ASM-OBJS-$(CONFIG_H263DSP)          += x86/h263_loopfilter.o
 X86ASM-OBJS-$(CONFIG_H264CHROMA)       += x86/h264_chromamc.o           \
                                           x86/h264_chromamc_10bit.o
@@ -126,7 +128,8 @@ X86ASM-OBJS-$(CONFIG_QPELDSP)          += x86/qpeldsp.o                 \
                                           x86/fpel.o                    \
                                           x86/qpel.o
 X86ASM-OBJS-$(CONFIG_RV34DSP)          += x86/rv34dsp.o
-X86ASM-OBJS-$(CONFIG_VC1DSP)           += x86/vc1dsp_loopfilter.o       \
+X86ASM-OBJS-$(CONFIG_VC1DSP)           += x86/vc1dsp_inv_trans.o        \
+                                          x86/vc1dsp_loopfilter.o       \
                                           x86/vc1dsp_mc.o x86/fpel.o
 ifdef ARCH_X86_64
 X86ASM-OBJS-$(CONFIG_IDCTDSP)          += x86/simple_idct10.o
@@ -172,7 +175,7 @@ X86ASM-OBJS-$(CONFIG_SVQ1_ENCODER)     += x86/svq1enc.o
 X86ASM-OBJS-$(CONFIG_TAK_DECODER)      += x86/takdsp.o
 X86ASM-OBJS-$(CONFIG_TRUEHD_DECODER)   += x86/mlpdsp.o
 X86ASM-OBJS-$(CONFIG_TTA_DECODER)      += x86/ttadsp.o
-X86ASM-OBJS-$(CONFIG_TTA_ENCODER)      += x86/ttaencdsp.o
+X86ASM-OBJS-$(CONFIG_TTA_ENCODER)      += x86/ttadsp.o
 X86ASM-OBJS-$(CONFIG_UTVIDEO_DECODER)  += x86/utvideodsp.o
 X86ASM-OBJS-$(CONFIG_V210_ENCODER)     += x86/v210enc.o
 X86ASM-OBJS-$(CONFIG_V210_DECODER)     += x86/v210.o

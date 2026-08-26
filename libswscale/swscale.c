@@ -1003,6 +1003,16 @@ static int scale_cascaded(SwsInternal *c,
                              0, dstH0);
     if (ret < 0)
         return ret;
+
+    /* The first stage assembles the full intermediate image from the input,
+     * one slice at a time (it is itself a regular slice-capable context). The
+     * second stage scales that whole intermediate to the output in one step,
+     * so it can only run once the entire source has been consumed. The first
+     * stage resets its slice direction to 0 at end of frame; until then the
+     * intermediate is incomplete and this call produces no output lines. */
+    if (sws_internal(c->cascaded_context[0])->sliceDir != 0)
+        return 0;
+
     ret = scale_internal(c->cascaded_context[1],
                          (const uint8_t * const * )c->cascaded_tmp[0], c->cascaded_tmpStride[0],
                          0, dstH0, dstSlice, dstStride, dstSliceY, dstSliceH);
@@ -1067,7 +1077,7 @@ static int scale_internal(SwsContext *sws,
         return scale_gamma(c, srcSlice, srcStride, srcSliceY, srcSliceH,
                            dstSlice, dstStride, dstSliceY, dstSliceH);
 
-    if (c->cascaded_context[0] && srcSliceY == 0 && srcSliceH == c->cascaded_context[0]->src_h)
+    if (c->cascaded_context[0])
         return scale_cascaded(c, srcSlice, srcStride, srcSliceY, srcSliceH,
                               dstSlice, dstStride, dstSliceY, dstSliceH);
 
@@ -1216,24 +1226,79 @@ void sws_frame_end(SwsContext *sws)
     c->src_ranges.nb_ranges = 0;
 }
 
+static int ptr_in_buf(const uint8_t *ptr, const AVBufferRef *buf)
+{
+    uintptr_t ptr_val = (uintptr_t) ptr;
+    uintptr_t buf_start = (uintptr_t) buf->data;
+    return ptr_val >= buf_start && ptr_val < buf_start + buf->size;
+}
+
+/* Similar to av_frame_ref() but only references planes in the given map */
+static int frame_ref(AVFrame *dst, const AVFrame *src, const int plane_copy[4])
+{
+    int copied[AV_NUM_DATA_POINTERS] = {0};
+    int nb_copied = 0;
+
+    for (int i = 0; i < 4; i++) {
+        const int idx = plane_copy[i];
+        if (idx < 0)
+            continue;
+        /* Find corresponding source buffer */
+        uint8_t *src_data = src->data[idx];
+        if (!src_data)
+            return AVERROR(EINVAL);
+        for (int j = 0; j < FF_ARRAY_ELEMS(src->buf); j++) {
+            AVBufferRef *buf = src->buf[j];
+            if (!buf)
+                break;
+            if (!ptr_in_buf(src_data, buf))
+                continue;
+            if (!copied[j]) {
+                AVBufferRef *ref = av_buffer_ref(buf);
+                if (!ref)
+                    return AVERROR(ENOMEM);
+                dst->buf[nb_copied++] = ref;
+                copied[j] = 1;
+            }
+            dst->data[i]     = src_data;
+            dst->linesize[i] = src->linesize[idx];
+            break;
+        }
+    }
+
+    return 0;
+}
+
+/* Returns the number of buffers allocated */
 static int frame_alloc_buffers(SwsContext *sws, AVFrame *frame)
 {
     SwsInternal *c = sws_internal(sws);
     FFFramePool *pool = &c->frame_pool;
-
     av_assert0(!frame->hw_frames_ctx);
+
+    /* Find first free buffer slot */
+    int buf_start = 0;
+    while (frame->buf[buf_start])
+        buf_start++;
+    int nb_bufs = 0;
+
     const int nb_planes = av_pix_fmt_count_planes(frame->format);
     for (int i = 0; i < nb_planes; i++) {
-        frame->linesize[i] = pool->linesize[i];
-        frame->buf[i] = av_buffer_pool_get(pool->pools[i]);
-        if (!frame->buf[i]) {
+        if (frame->data[i])
+            continue; /* already ref'd by frame_ref */
+
+        const int idx = buf_start + nb_bufs++;
+        av_assert1(idx < FF_ARRAY_ELEMS(frame->buf));
+        frame->buf[idx] = av_buffer_pool_get(pool->pools[i]);
+        if (!frame->buf[idx]) {
             av_frame_unref(frame);
             return AVERROR(ENOMEM);
         }
-        frame->data[i] = frame->buf[i]->data;
+        frame->data[i] = frame->buf[idx]->data;
+        frame->linesize[i] = pool->linesize[i];
     }
 
-    return 0;
+    return nb_bufs;
 }
 
 int sws_frame_start(SwsContext *sws, AVFrame *dst, const AVFrame *src)
@@ -1318,26 +1383,13 @@ int sws_receive_slice(SwsContext *sws, unsigned int slice_start,
 
     if (c->slicethread) {
         int nb_jobs = c->nb_slice_ctx;
-        int ret = 0;
-
         if (c->slice_ctx[0]->dither == SWS_DITHER_ED)
             nb_jobs = 1;
 
         c->dst_slice_start  = slice_start;
         c->dst_slice_height = slice_height;
 
-        avpriv_slicethread_execute(c->slicethread, nb_jobs, 0);
-
-        for (int i = 0; i < c->nb_slice_ctx; i++) {
-            if (c->slice_err[i] < 0) {
-                ret = c->slice_err[i];
-                break;
-            }
-        }
-
-        memset(c->slice_err, 0, c->nb_slice_ctx * sizeof(*c->slice_err));
-
-        return ret;
+        return avpriv_slicethread_execute2(c->slicethread, nb_jobs, 0);
     }
 
     for (int i = 0; i < FF_ARRAY_ELEMS(dst); i++) {
@@ -1348,23 +1400,6 @@ int sws_receive_slice(SwsContext *sws, unsigned int slice_start,
     return scale_internal(sws, (const uint8_t * const *)c->frame_src->data,
                           c->frame_src->linesize, 0, sws->src_h,
                           dst, c->frame_dst->linesize, slice_start, slice_height);
-}
-
-/* Subset of av_frame_ref() that only references (video) data buffers */
-static int frame_ref(AVFrame *dst, const AVFrame *src)
-{
-    /* ref the buffers */
-    for (int i = 0; i < FF_ARRAY_ELEMS(src->buf); i++) {
-        if (!src->buf[i])
-            break;
-        dst->buf[i] = av_buffer_ref(src->buf[i]);
-        if (!dst->buf[i])
-            return AVERROR(ENOMEM);
-    }
-
-    memcpy(dst->data,     src->data,     sizeof(src->data));
-    memcpy(dst->linesize, src->linesize, sizeof(src->linesize));
-    return 0;
 }
 
 int sws_scale_frame(SwsContext *sws, AVFrame *dst, const AVFrame *src)
@@ -1408,13 +1443,28 @@ int sws_scale_frame(SwsContext *sws, AVFrame *dst, const AVFrame *src)
     memset(dst->linesize, 0, sizeof(dst->linesize));
     dst->extended_data = dst->data;
 
-    if (src->buf[0] && top->noop && (!bot || bot->noop))
-        return frame_ref(dst, src);
+    if (src->buf[0]) {
+        /* Determine end-to-end plane copy map */
+        int plane_copy[FF_ARRAY_ELEMS(top->plane_copy)];
+        memcpy(plane_copy, top->plane_copy, sizeof(plane_copy));
+        for (int i = 0; bot && i < FF_ARRAY_ELEMS(plane_copy); i++) {
+            if (bot->plane_copy[i] != plane_copy[i])
+                plane_copy[i] = -1;
+        }
 
+        ret = frame_ref(dst, src, plane_copy);
+        if (ret < 0)
+            return ret;
+    }
+
+    /* Allocate any missing buffers not yet ref'd */
     ret = frame_alloc_buffers(sws, dst);
     if (ret < 0)
         return ret;
-    allocated = 1;
+    else if (!ret)
+        return 0; /* no buffers allocated, no-op (all ref'd) */
+    else
+        allocated = 1;
 
 process_frame:
     for (int field = 0; field < (bot ? 2 : 1); field++) {
@@ -1502,7 +1552,7 @@ int sws_frame_setup(SwsContext *ctx, const AVFrame *dst, const AVFrame *src)
 
         src_ok = ff_test_fmt(backends, &src_fmt, 0);
         dst_ok = ff_test_fmt(backends, &dst_fmt, 1);
-        if ((!src_ok || !dst_ok) && !ff_props_equal(&src_fmt, &dst_fmt)) {
+        if ((!src_ok || !dst_ok) && !ff_fmt_equal(&src_fmt, &dst_fmt)) {
             err_msg = src_ok ? "Unsupported output" : "Unsupported input";
             ret = AVERROR(ENOTSUP);
             goto fail;
@@ -1517,7 +1567,7 @@ int sws_frame_setup(SwsContext *ctx, const AVFrame *dst, const AVFrame *src)
             }
         }
 
-        ret = ff_sws_graph_reinit(s->graph[field], ctx, &dst_fmt, &src_fmt, field);
+        ret = ff_sws_graph_reinit(s->graph[field], ctx, &dst_fmt, &src_fmt);
         if (ret < 0) {
             err_msg = "Failed initializing scaling graph";
             goto fail;
@@ -1592,8 +1642,8 @@ int attribute_align_arg sws_scale(SwsContext *sws,
                           dst, dstStride, 0, sws->dst_h);
 }
 
-void ff_sws_slice_worker(void *priv, int jobnr, int threadnr,
-                         int nb_jobs, int nb_threads)
+int ff_sws_slice_worker(void *priv, int jobnr, int threadnr,
+                        int nb_jobs, int nb_threads)
 {
     SwsInternal *parent = priv;
     SwsContext     *sws = parent->slice_ctx[threadnr];
@@ -1622,5 +1672,8 @@ void ff_sws_slice_worker(void *priv, int jobnr, int threadnr,
                              parent->dst_slice_start + slice_start, slice_end - slice_start);
     }
 
-    parent->slice_err[threadnr] = err;
+    if (err < 0)
+        return err;
+
+    return 0; /* ff_slicethread_execute() aborts on non-zero */
 }

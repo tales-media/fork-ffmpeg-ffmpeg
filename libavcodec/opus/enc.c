@@ -21,7 +21,6 @@
 
 #include <float.h>
 
-#include "encode.h"
 #include "enc.h"
 #include "pvq.h"
 #include "enc_psy.h"
@@ -32,9 +31,11 @@
 #include "libavutil/mem.h"
 #include "libavutil/mem_internal.h"
 #include "libavutil/opt.h"
-#include "bytestream.h"
-#include "audio_frame_queue.h"
-#include "codec_internal.h"
+
+#include "libavcodec/audio_frame_queue.h"
+#include "libavcodec/bytestream.h"
+#include "libavcodec/codec_internal.h"
+#include "libavcodec/encode.h"
 
 typedef struct OpusEncContext {
     AVClass *av_class;
@@ -610,7 +611,9 @@ static int opus_encode_frame(AVCodecContext *avctx, AVPacket *avpkt,
     ff_opus_psy_postencode_update(&s->psyctx, s->frame);
 
     /* Remove samples from queue and skip if needed */
-    ff_af_queue_remove(&s->afq, s->packet.frames*frame_size, &avpkt->pts, &avpkt->duration);
+    ret = ff_af_queue_remove(&s->afq, s->packet.frames*frame_size, avpkt);
+    if (ret < 0)
+        return ret;
 
     discard_padding = s->packet.frames*frame_size - ff_samples_from_time_base(avctx, avpkt->duration);
     if (discard_padding > 0) {

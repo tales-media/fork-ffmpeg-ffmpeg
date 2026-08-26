@@ -30,6 +30,7 @@
 #include <signal.h>
 #include <stdint.h>
 
+#include "libavutil/attributes.h"
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
 #include "libavutil/mathematics.h"
@@ -3576,6 +3577,7 @@ static void event_loop(VideoState *cur_stream)
                     last_mouse_left_click = av_gettime_relative();
                 }
             }
+            av_fallthrough;
         case SDL_MOUSEMOTION:
             if (cursor_hidden) {
                 SDL_ShowCursor(1);
@@ -3627,6 +3629,7 @@ static void event_loop(VideoState *cur_stream)
                     }
                     if (vk_renderer)
                         vk_renderer_resize(vk_renderer, screen_width, screen_height);
+                    av_fallthrough;
                 case SDL_WINDOWEVENT_EXPOSED:
                     cur_stream->force_refresh = 1;
             }
@@ -3883,12 +3886,6 @@ int main(int argc, char **argv)
     flags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER;
     if (audio_disable)
         flags &= ~SDL_INIT_AUDIO;
-    else {
-        /* Try to work around an occasional ALSA buffer underflow issue when the
-         * period size is NPOT due to ALSA resampling by forcing the buffer size. */
-        if (!SDL_getenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE"))
-            SDL_setenv("SDL_AUDIO_ALSA_SET_BUFFER_SIZE","1", 1);
-    }
     if (display_disable)
         flags &= ~SDL_INIT_VIDEO;
     if (SDL_Init (flags)) {

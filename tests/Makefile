@@ -51,7 +51,7 @@ tests/test_copy.ffmeta: TAG = COPY
 tests/test_copy.ffmeta: tests/data
 	$(M)cp -f $(SRC_PATH)/tests/test.ffmeta tests/test_copy.ffmeta
 
-tests/data/%.sw tests/data/asynth% tests/data/vsynth%.yuv tests/vsynth%/00.pgm tests/data/%.nut: TAG = GEN
+tests/data/%.sw tests/data/asynth% tests/data/vsynth%.yuv tests/vsynth%/00.pgm tests/data/%.nut tests/data/%.m3u8: TAG = GEN
 
 tests/data/filtergraphs/%: TAG = COPY
 tests/data/filtergraphs/%: $(SRC_PATH)/tests/filtergraphs/% | tests/data/filtergraphs
@@ -259,6 +259,7 @@ include $(SRC_PATH)/tests/fate/vorbis.mak
 include $(SRC_PATH)/tests/fate/vpx.mak
 include $(SRC_PATH)/tests/fate/vqf.mak
 include $(SRC_PATH)/tests/fate/vvc.mak
+include $(SRC_PATH)/tests/fate/wav.mak
 include $(SRC_PATH)/tests/fate/wavpack.mak
 include $(SRC_PATH)/tests/fate/webm-dash-manifest.mak
 include $(SRC_PATH)/tests/fate/wma.mak

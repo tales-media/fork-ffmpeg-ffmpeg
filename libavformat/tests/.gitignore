@@ -1,8 +1,9 @@
 /id3v2
 /fifo_muxer
 /imf
-/movenc
+/mkdir
 /noproxy
+/rename
 /rtmpdh
 /seek
 /srtp

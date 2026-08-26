@@ -1645,19 +1645,6 @@ typedef struct AVCodecContext {
      */
      int level;
 
-#if FF_API_CODEC_PROPS
-    /**
-     * Properties of the stream that gets decoded
-     * - encoding: unused
-     * - decoding: set by libavcodec
-     */
-    attribute_deprecated
-    unsigned properties;
-#define FF_CODEC_PROPERTY_LOSSLESS        0x00000001
-#define FF_CODEC_PROPERTY_CLOSED_CAPTIONS 0x00000002
-#define FF_CODEC_PROPERTY_FILM_GRAIN      0x00000004
-#endif
-
     /**
      * Skip loop filtering for selected frames.
      * - encoding: unused
@@ -2247,6 +2234,32 @@ int avcodec_parameters_to_context(AVCodecContext *codec,
 int avcodec_open2(AVCodecContext *avctx, const AVCodec *codec, AVDictionary **options);
 
 /**
+ * Try to reconfigure the encoder with the provided dictionary. May only be used
+ * if a codec with AV_CODEC_CAP_ENCODER_RECONF has been opened.
+ *
+ * Not all options can be changed, and it depends on the encoder. If any of the
+ * options can't be applied (Either because the option can't be changed, because
+ * invalid values for them were passed, or other errors), it is not guaranteed that
+ * the state of the encoder is the same as prior to calling this function, but in
+ * most cases it should.
+ * Unapplied options will remain in *dict, and owned by the caller.
+ *
+ * @param avctx   The context to reconfigure.
+ * @param options A dictionary filled with AVCodecContext and codec-private
+ *                options, which are set on top of the options already set in
+ *                avctx. Can't be NULL.
+ *
+ * @retval 0                         success
+ * @retval AVERROR_OPTION_NOT_FOUND  an entry with an invalid key was passed. The
+ *                                   context is untouched.
+ * @retval AVERROR(EINVAL)           an entry with an invalid value or an invalid
+ *                                   argument was passed.
+ * @retval AVERROR(ENOSYS)           unsupported encoder. The context is untouched.
+ * @retval "another negative error code" other errors.
+ */
+int avcodec_encode_reconfigure(AVCodecContext *avctx, AVDictionary **options);
+
+/**
  * Free all allocated data in the given subtitle struct.
  *
  * @param sub AVSubtitle to free.
@@ -2761,35 +2774,7 @@ typedef struct AVCodecParserContext {
 } AVCodecParserContext;
 
 typedef struct AVCodecParser {
-#if FF_API_PARSER_CODECID
-    int codec_ids[7]; /* several codec IDs are permitted */
-#else
     enum AVCodecID codec_ids[7]; /* several codec IDs are permitted */
-#endif
-#if FF_API_PARSER_PRIVATE
-    /*****************************************************************
-     * All fields below this line are not part of the public API. They
-     * may not be used outside of libavcodec and can be changed and
-     * removed at will.
-     * New public fields should be added right above.
-     *****************************************************************
-     */
-    attribute_deprecated
-    int priv_data_size;
-    attribute_deprecated
-    int (*parser_init)(AVCodecParserContext *s);
-    /* This callback never returns an error, a negative value means that
-     * the frame start was in a previous packet. */
-    attribute_deprecated
-    int (*parser_parse)(AVCodecParserContext *s,
-                        AVCodecContext *avctx,
-                        const uint8_t **poutbuf, int *poutbuf_size,
-                        const uint8_t *buf, int buf_size);
-    attribute_deprecated
-    void (*parser_close)(AVCodecParserContext *s);
-    attribute_deprecated
-    int (*split)(AVCodecContext *avctx, const uint8_t *buf, int buf_size);
-#endif
 } AVCodecParser;
 
 /**
@@ -2803,11 +2788,7 @@ typedef struct AVCodecParser {
  */
 const AVCodecParser *av_parser_iterate(void **opaque);
 
-#if FF_API_PARSER_CODECID
-AVCodecParserContext *av_parser_init(int codec_id);
-#else
 AVCodecParserContext *av_parser_init(enum AVCodecID codec_id);
-#endif
 
 /**
  * Parse a packet.

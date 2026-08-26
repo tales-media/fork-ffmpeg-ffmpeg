@@ -305,6 +305,10 @@ static int wav_write_header(AVFormatContext *s)
     AVIOContext *pb = s->pb;
     int64_t fmt;
 
+    if (wav->rf64 == RF64_AUTO && !(s->pb->seekable & AVIO_SEEKABLE_NORMAL)) {
+        wav->rf64 = RF64_NEVER;
+    }
+
     if (wav->rf64 == RF64_ALWAYS) {
         ffio_wfourcc(pb, "RF64");
         avio_wl32(pb, -1); /* RF64 chunk size: use size in ds64 */
@@ -426,7 +430,8 @@ static int wav_write_trailer(AVFormatContext *s)
     int ret = 0;
 
     if (s->pb->seekable & AVIO_SEEKABLE_NORMAL) {
-        if (wav->write_peak != PEAK_ONLY && avio_tell(pb) - wav->data < UINT32_MAX) {
+        data_size = avio_tell(pb) - wav->data;
+        if (wav->write_peak != PEAK_ONLY && data_size < UINT32_MAX) {
             ff_end_tag(pb, wav->data);
         }
 
@@ -436,7 +441,6 @@ static int wav_write_trailer(AVFormatContext *s)
 
         /* update file size */
         file_size = avio_tell(pb);
-        data_size = file_size - wav->data;
         if (wav->rf64 == RF64_ALWAYS || (wav->rf64 == RF64_AUTO && file_size - 8 > UINT32_MAX)) {
             rf64 = 1;
         } else if (file_size - 8 <= UINT32_MAX) {

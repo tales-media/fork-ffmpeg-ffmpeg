@@ -137,14 +137,14 @@ typedef struct DASHContext {
     struct representation **subtitles;
 
     /* MediaPresentationDescription Attribute */
-    uint64_t media_presentation_duration;
-    uint64_t suggested_presentation_delay;
-    uint64_t availability_start_time;
-    uint64_t availability_end_time;
-    uint64_t publish_time;
-    uint64_t minimum_update_period;
-    uint64_t time_shift_buffer_depth;
-    uint64_t min_buffer_time;
+    int64_t media_presentation_duration;
+    int64_t suggested_presentation_delay;
+    int64_t availability_start_time;
+    int64_t availability_end_time;
+    int64_t publish_time;
+    int64_t minimum_update_period;
+    int64_t time_shift_buffer_depth;
+    int64_t min_buffer_time;
 
     /* Period Attribute */
     uint64_t period_duration;
@@ -180,12 +180,12 @@ static int aligned(int val)
     return ((val + 0x3F) >> 6) << 6;
 }
 
-static uint64_t get_current_time_in_sec(void)
+static int64_t get_current_time_in_sec(void)
 {
     return  av_gettime() / 1000000;
 }
 
-static uint64_t get_utc_date_time_insec(AVFormatContext *s, const char *datetime)
+static int64_t get_utc_date_time_insec(AVFormatContext *s, const char *datetime)
 {
     struct tm timeinfo;
     int year = 0;
@@ -589,7 +589,7 @@ static enum AVMediaType get_content_type(xmlNodePtr node)
     return type;
 }
 
-static struct fragment *get_fragment(char *range)
+static struct fragment *get_fragment(AVFormatContext *s, char *range)
 {
     struct fragment *seg = av_mallocz(sizeof(struct fragment));
 
@@ -600,6 +600,11 @@ static struct fragment *get_fragment(char *range)
     if (range) {
         char *str_end_offset;
         char *str_offset = av_strtok(range, "-", &str_end_offset);
+        if (!str_offset || !str_end_offset) {
+            av_log(s, AV_LOG_WARNING, "%s will get invalid range\n", range);
+            av_freep(&seg);
+            return NULL;
+        }
         seg->url_offset = strtoll(str_offset, NULL, 10);
         seg->size = strtoll(str_end_offset, NULL, 10) - seg->url_offset + 1;
     }
@@ -625,7 +630,7 @@ static int parse_manifest_segmenturlnode(AVFormatContext *s, struct representati
         range_val = xmlGetProp(fragmenturl_node, "range");
         if (initialization_val || range_val) {
             free_fragment(&rep->init_section);
-            rep->init_section = get_fragment(range_val);
+            rep->init_section = get_fragment(s, range_val);
             xmlFree(range_val);
             if (!rep->init_section) {
                 xmlFree(initialization_val);
@@ -646,7 +651,7 @@ static int parse_manifest_segmenturlnode(AVFormatContext *s, struct representati
         media_val = xmlGetProp(fragmenturl_node, "media");
         range_val = xmlGetProp(fragmenturl_node, "mediaRange");
         if (media_val || range_val) {
-            struct fragment *seg = get_fragment(range_val);
+            struct fragment *seg = get_fragment(s, range_val);
             xmlFree(range_val);
             if (!seg) {
                 xmlFree(media_val);
@@ -1456,7 +1461,7 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
         } else if (pls->fragment_duration){
             av_log(s, AV_LOG_TRACE, "in fragment_duration mode fragment_timescale = %"PRId64", presentation_timeoffset = %"PRId64"\n", pls->fragment_timescale, pls->presentation_timeoffset);
             if (pls->presentation_timeoffset) {
-                num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time) * pls->fragment_timescale)-pls->presentation_timeoffset) / pls->fragment_duration - c->min_buffer_time;
+                num = pls->first_seq_no + ((get_current_time_in_sec() - c->availability_start_time) * pls->fragment_timescale) / pls->fragment_duration - c->min_buffer_time;
             } else if (c->publish_time > 0 && !c->availability_start_time) {
                 if (c->min_buffer_time) {
                     num = pls->first_seq_no + (((c->publish_time + pls->fragment_duration) - c->suggested_presentation_delay) * pls->fragment_timescale) / pls->fragment_duration - c->min_buffer_time;
@@ -1498,8 +1503,7 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         num = pls->first_seq_no + pls->n_timelines - 1;
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->repeat == -1) {
-                int length_of_each_segment = pls->timelines[i]->duration / pls->fragment_timescale;
-                num =  c->period_duration / length_of_each_segment;
+                num = pls->timelines[i]->duration ? av_rescale(c->period_duration, pls->fragment_timescale, pls->timelines[i]->duration) : pls->first_seq_no;
             } else {
                 num += pls->timelines[i]->repeat;
             }
@@ -1533,8 +1537,11 @@ static void move_segments(struct representation *rep_src, struct representation 
         free_fragment_list(rep_dest);
         if (rep_src->start_number > (rep_dest->start_number + rep_dest->n_fragments))
             rep_dest->cur_seq_no = 0;
-        else
+        else {
             rep_dest->cur_seq_no += rep_src->start_number - rep_dest->start_number;
+            if (rep_dest->cur_seq_no < 0)
+                rep_dest->cur_seq_no = 0;
+        }
         rep_dest->fragments    = rep_src->fragments;
         rep_dest->n_fragments  = rep_src->n_fragments;
         rep_dest->parent  = rep_src->parent;
@@ -1591,7 +1598,7 @@ static int refresh_manifest(AVFormatContext *s)
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
         struct representation *ccur_video = c->videos[i];
-        if (cur_video->timelines) {
+        if (cur_video->timelines && cur_video->fragment_timescale > 0) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
             // update segments
@@ -1607,7 +1614,7 @@ static int refresh_manifest(AVFormatContext *s)
     for (i = 0; i < n_audios; i++) {
         struct representation *cur_audio = audios[i];
         struct representation *ccur_audio = c->audios[i];
-        if (cur_audio->timelines) {
+        if (cur_audio->timelines && cur_audio->fragment_timescale > 0) {
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
             // update segments
@@ -1654,7 +1661,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
     int reload_count = 0;
 
     while (( !ff_check_interrupt(c->interrupt_callback)&& pls->n_fragments > 0)) {
-        if (pls->cur_seq_no < pls->n_fragments) {
+        if (pls->cur_seq_no >= 0 && pls->cur_seq_no < pls->n_fragments) {
             seg_ptr = pls->fragments[pls->cur_seq_no];
             seg = av_mallocz(sizeof(struct fragment));
             if (!seg) {
@@ -2376,7 +2383,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     }
 
     if (!cur) {
-        return AVERROR_INVALIDDATA;
+        return AVERROR_EOF;
     }
     while (!ff_check_interrupt(c->interrupt_callback) && !ret) {
         ret = av_read_frame(cur->ctx, pkt);
@@ -2392,9 +2399,17 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             cur->is_restart_needed = 0;
             ff_format_io_close(cur->parent, &cur->input);
             ret = reopen_demux_for_component(s, cur);
+        } else if (ret == AVERROR_EOF) {
+            close_demux_for_component(cur);
+            ff_format_io_close(cur->parent, &cur->input);
+            av_log(s, AV_LOG_DEBUG, "EOF on stream_index %d\n", cur->stream_index);
+            // prevent recheck_discard_flags() from re-enabling the component
+            for (int i = 0; i < cur->nb_assoc_stream; i++)
+                cur->assoc_stream[i]->discard = AVDISCARD_ALL;
+            return FFERROR_REDO;
         }
     }
-    return AVERROR_EOF;
+    return ret;
 }
 
 static int dash_close(AVFormatContext *s)
